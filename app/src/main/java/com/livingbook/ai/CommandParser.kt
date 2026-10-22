@@ -5,10 +5,13 @@ object CommandParser {
     /** [hasActiveExplanation]: the last message was an AI explanation, so a bare "continue" means continue explaining. */
     fun parse(text: String, hasActiveExplanation: Boolean): ReaderCommand? {
         val phrase = normalize(text)
-        if (phrase in BARE_CONTINUE) {
-            return if (hasActiveExplanation) ReaderCommand.Tutor(TutorAction.CONTINUE_EXPLAINING) else ReaderCommand.ContinueReading
+        val command = if (phrase in BARE_CONTINUE) {
+            if (hasActiveExplanation) ReaderCommand.Tutor(TutorAction.CONTINUE_EXPLAINING) else ReaderCommand.ContinueReading
+        } else {
+            COMMANDS[phrase]
         }
-        return COMMANDS[phrase]
+        // "Go back?" or "Skip this?" asks about something; acting on it would move or save without being told to.
+        return if (text.trimEnd().endsWith("?") && command !is ReaderCommand.Tutor) null else command
     }
 
     /** Lowercase, no punctuation, no fillers: "Okay, can you go deeper?" -> "go deeper". */
