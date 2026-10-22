@@ -48,6 +48,8 @@ data class SavedPosition(
     val rendition: Rendition,
     val wasPlaying: Boolean,
     val startedAt: Long,
+    /** Text of the interrupted sentence: checks the sentence list is unchanged, and feeds the recap line. */
+    val sentenceText: String? = null,
 )
 
 data class SessionState(
@@ -126,6 +128,8 @@ class ReadingSession(
 
     private var loadJob: Job? = null
     private var guidedJob: Job? = null
+    /** Narration was asked to play while the guided text was still being generated. */
+    private var playWhenGuidedReady = false
 
     init {
         scope.launch {
@@ -148,6 +152,8 @@ class ReadingSession(
 
     suspend fun open(bookId: String) {
         if (_state.value.book?.id == bookId) return
+        loadJob?.cancel()
+        guidedJob?.cancel()
         narration.stop()
         val book = reading.book(bookId) ?: run {
             _state.update { it.copy(message = "This book is no longer in your library.") }
@@ -157,10 +163,12 @@ class ReadingSession(
         val progress = reading.progress(bookId)
         val topics = reading.topics(bookId, prefs.granularity)
         val position = progress?.let { ReadingPosition(it.blockIndex, it.charOffset) } ?: ReadingPosition(0)
+        val index = topicIndexFor(topics, position.blockIndex)
         _state.value = SessionState(
             book = book,
             topics = topics,
             sections = reading.sections(bookId),
+            topicIndex = index,
             granularity = prefs.granularity,
             rendition = progress?.rendition ?: Rendition.ORIGINAL,
             mode = progress?.mode ?: ReadMode.READ,
@@ -169,13 +177,14 @@ class ReadingSession(
         narration.setRate(prefs.ttsRate)
         narration.setVoice(prefs.ttsVoice)
         reading.markOpened(bookId)
-        loadTopic(topicIndexFor(topics, position.blockIndex), position, play = false).join()
+        loadTopic(index, position, play = false).join()
     }
 
     fun close() {
         narration.stop()
         loadJob?.cancel()
         guidedJob?.cancel()
+        playWhenGuidedReady = false
         _state.value = SessionState()
     }
 
@@ -186,22 +195,26 @@ class ReadingSession(
     fun goToTopic(index: Int) {
         val s = _state.value
         if (index !in s.topics.indices) return
-        loadTopic(index, ReadingPosition(s.topics[index].startBlock), play = isPlaying())
+        loadTopic(index, ReadingPosition(s.topics[index].startBlock), play = isPlaying() || playWhenGuidedReady)
     }
 
-    /** Jump to a cited passage. Remembers where the reader was so they can go back. */
+    /**
+     * Jump to a cited passage. Remembers where the reader was (the first place, across chained jumps) so they can go
+     * back, and does not overwrite saved progress with the detour.
+     */
     fun goToBlock(blockIndex: Int) {
         val s = _state.value
-        val here = s.saved ?: snapshot(wasPlaying = false)
+        val here = s.returnTo ?: s.saved ?: snapshot(wasPlaying = isPlaying())
+        narration.stopSpeakingOnce()
         narration.pause()
         _state.update { it.copy(returnTo = here, saved = null, phase = PhaseRules.idlePhase(it.mode)) }
-        loadTopic(topicIndexFor(s.topics, blockIndex), ReadingPosition(blockIndex), play = false, focus = blockIndex)
+        loadTopic(topicIndexFor(s.topics, blockIndex), ReadingPosition(blockIndex), play = false, focus = blockIndex, persist = false)
     }
 
     fun returnToSaved() {
         val back = _state.value.returnTo ?: return
         _state.update { it.copy(returnTo = null, rendition = back.rendition) }
-        loadTopic(back.topicIndex, back.position, play = false, focus = back.position.blockIndex)
+        loadTopic(back.topicIndex, back.position, play = back.wasPlaying, focus = back.position.blockIndex)
     }
 
     fun consumeFocus() = _state.update { it.copy(focusBlock = null) }
@@ -216,6 +229,7 @@ class ReadingSession(
         _state.update { it.copy(mode = mode, focusBlock = it.currentSentence?.blockIndex) }
         if (mode == ReadMode.LISTEN) play() else {
             narration.pause()
+            playWhenGuidedReady = false
             _state.update { it.copy(phase = SessionPhase.READING) }
         }
         saveProgress()
@@ -225,7 +239,8 @@ class ReadingSession(
         val s = _state.value
         if (s.rendition == rendition || s.topic == null) return
         val position = s.position
-        val wasPlaying = isPlaying()
+        val wasPlaying = isPlaying() || playWhenGuidedReady
+        playWhenGuidedReady = false
         _state.update { it.copy(rendition = rendition) }
         rebuildSentences(position, wasPlaying)
         if (rendition == Rendition.GUIDED) ensureGuided()
@@ -236,13 +251,17 @@ class ReadingSession(
         val s = _state.value
         val book = s.book ?: return
         if (s.granularity == granularity) return
-        val position = s.position
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             settings.update { it.copy(granularity = granularity) }
             val topics = reading.topics(book.id, granularity)
+            val position = _state.value.position
             val index = topicIndexFor(topics, position.blockIndex)
-            _state.update { it.copy(topics = topics, granularity = granularity, topicIndex = index) }
-            loadTopic(index, position, play = isPlaying())
+            fun SavedPosition.remap() = copy(topicIndex = topicIndexFor(topics, this.position.blockIndex))
+            _state.update {
+                it.copy(topics = topics, granularity = granularity, topicIndex = index, returnTo = it.returnTo?.remap(), saved = it.saved?.remap())
+            }
+            loadTopic(index, position, play = isPlaying() || playWhenGuidedReady)
         }
     }
 
@@ -252,16 +271,21 @@ class ReadingSession(
         val s = _state.value
         if (s.phase == SessionPhase.CONVERSATION || s.topic == null) return
         _state.update { it.copy(mode = ReadMode.LISTEN, phase = SessionPhase.LISTENING) }
+        if (s.rendition == Rendition.GUIDED && (s.guided is GuidedState.Idle || s.guided is GuidedState.Loading)) {
+            playWhenGuidedReady = true
+            return
+        }
         narration.play()
     }
 
     fun pause() {
+        playWhenGuidedReady = false
         narration.pause()
         _state.update { if (it.phase == SessionPhase.CONVERSATION) it else it.copy(phase = PhaseRules.idlePhase(it.mode)) }
         saveProgress()
     }
 
-    fun togglePlay() = if (isPlaying()) pause() else play()
+    fun togglePlay() = if (isPlaying() || playWhenGuidedReady) pause() else play()
 
     fun skipForward() = narration.skipForward()
 
@@ -292,7 +316,8 @@ class ReadingSession(
         val s = _state.value
         if (s.book == null || s.topic == null) return null
         if (s.phase != SessionPhase.CONVERSATION) {
-            val saved = snapshot(wasPlaying = isPlaying())
+            val saved = snapshot(wasPlaying = isPlaying() || playWhenGuidedReady)
+            playWhenGuidedReady = false
             narration.pause()
             _state.update { it.copy(phase = SessionPhase.CONVERSATION, saved = saved, resumeHint = null) }
         }
@@ -305,21 +330,29 @@ class ReadingSession(
      */
     fun endConversation(resume: Boolean, messagesExchanged: Int = 0) {
         val s = _state.value
-        if (s.phase != SessionPhase.CONVERSATION) return
         narration.stopSpeakingOnce()
+        if (s.phase != SessionPhase.CONVERSATION) return
         val saved = s.saved
         val phase = PhaseRules.afterConversation(saved, resume, s.mode)
-        val hint = saved?.takeIf { PhaseRules.needsRecap(it, clock(), messagesExchanged) }
-            ?.let { s.sentences.getOrNull(it.sentenceIndex)?.text }
+        val hint = saved?.takeIf { PhaseRules.needsRecap(it, clock(), messagesExchanged) }?.sentenceText
             ?.let { "Picking up at: “${it.take(90)}${if (it.length > 90) "…" else ""}”" }
         _state.update { it.copy(phase = phase, saved = null, resumeHint = hint) }
         if (saved == null) return
-        if (saved.topicIndex == s.topicIndex && saved.rendition == s.rendition) {
-            narration.seekToSentence(saved.sentenceIndex)
-            if (phase == SessionPhase.LISTENING) narration.play()
-        } else {
-            _state.update { it.copy(rendition = saved.rendition) }
-            loadTopic(saved.topicIndex, saved.position, play = phase == SessionPhase.LISTENING)
+        val play = phase == SessionPhase.LISTENING
+        val sameTopic = saved.topicIndex == s.topicIndex && saved.rendition == s.rendition
+        // Guided text may have arrived during the talk; then the sentence list changes and the position is remapped.
+        val unchanged = sameTopic && s.sentences == sentencesFor(s) && s.sentences.getOrNull(saved.sentenceIndex)?.text == saved.sentenceText
+        when {
+            unchanged -> {
+                _state.update { it.copy(sentenceIndex = saved.sentenceIndex) }
+                narration.seekToSentence(saved.sentenceIndex)
+                if (play) play()
+            }
+            sameTopic -> rebuildSentences(saved.position, play)
+            else -> {
+                _state.update { it.copy(rendition = saved.rendition) }
+                loadTopic(saved.topicIndex, saved.position, play = play)
+            }
         }
     }
 
@@ -343,7 +376,7 @@ class ReadingSession(
             author = book.author,
             topic = topic,
             topicBlocks = if (topicIndex == s.topicIndex) s.blocks else emptyList(),
-            currentSentence = s.sentences.getOrNull(s.saved?.sentenceIndex ?: s.sentenceIndex)?.text,
+            currentSentence = s.saved?.sentenceText ?: s.currentSentence?.text,
             rendition = s.rendition,
             selectedText = selectedText,
         )
@@ -369,16 +402,20 @@ class ReadingSession(
 
     private fun onNarrationEvent(event: NarrationEvent) {
         val s = _state.value
-        if (s.book == null) return
+        val book = s.book ?: return
+        // Media buttons and late callbacks must not move the book while the user is talking.
+        if (s.phase == SessionPhase.CONVERSATION && event !is NarrationEvent.Interrupted) return
         when (event) {
             NarrationEvent.TopicFinished -> scope.launch {
                 val finished = s.topicIndex
                 refreshSuggestions(finished)
                 val autoplay = settings.current().autoplay
-                when (PhaseRules.onTopicFinished(autoplay, s.hasNext, _state.value.suggestions.isNotEmpty())) {
-                    PhaseRules.TopicEnd.ADVANCE_AND_PLAY -> {
-                        loadTopic(finished + 1, ReadingPosition(s.topics[finished + 1].startBlock), play = true, keepSuggestions = true)
-                    }
+                val now = _state.value
+                // The user may have navigated, opened another book or started talking meanwhile.
+                if (now.book?.id != book.id || now.topicIndex != finished || now.phase == SessionPhase.CONVERSATION) return@launch
+                when (PhaseRules.onTopicFinished(autoplay, now.hasNext, now.suggestions.isNotEmpty())) {
+                    PhaseRules.TopicEnd.ADVANCE_AND_PLAY ->
+                        loadTopic(finished + 1, ReadingPosition(now.topics[finished + 1].startBlock), play = true, keepSuggestions = true)
                     PhaseRules.TopicEnd.SHOW_GUIDANCE -> _state.update { it.copy(phase = SessionPhase.OPTIONAL_GUIDANCE) }
                     PhaseRules.TopicEnd.STOP -> _state.update { it.copy(phase = SessionPhase.PAUSED) }
                 }
@@ -386,6 +423,7 @@ class ReadingSession(
             NarrationEvent.NextTopicRequested -> nextTopic()
             NarrationEvent.PreviousTopicRequested -> previousTopic()
             is NarrationEvent.Interrupted -> {
+                playWhenGuidedReady = false
                 if (s.phase != SessionPhase.CONVERSATION) _state.update { it.copy(phase = SessionPhase.PAUSED) }
                 saveProgress()
             }
@@ -396,7 +434,7 @@ class ReadingSession(
 
     private fun snapshot(wasPlaying: Boolean): SavedPosition {
         val s = _state.value
-        return SavedPosition(s.topicIndex, s.sentenceIndex, s.position, s.rendition, wasPlaying, clock())
+        return SavedPosition(s.topicIndex, s.sentenceIndex, s.position, s.rendition, wasPlaying, clock(), s.currentSentence?.text)
     }
 
     private fun loadTopic(
@@ -405,15 +443,21 @@ class ReadingSession(
         play: Boolean,
         focus: Int? = null,
         keepSuggestions: Boolean = false,
+        persist: Boolean = true,
     ): Job {
         loadJob?.cancel()
         guidedJob?.cancel()
+        playWhenGuidedReady = false
+        // Silence the old topic right away so it cannot finish (and auto-advance) while the new one loads.
+        if (index != _state.value.topicIndex) narration.pause()
         return scope.launch {
-            val s = _state.value
-            val book = s.book ?: return@launch
-            val topic = s.topics.getOrNull(index) ?: return@launch
+            val book = _state.value.book ?: return@launch
+            val topic = _state.value.topics.getOrNull(index) ?: return@launch
             val blocks = reading.blocks(book.id, topic.startBlock, topic.endBlock)
-            val cached = if (s.rendition == Rendition.GUIDED) reading.guided(book.id, topic.startBlock, topic.endBlock) else null
+            val rendition = _state.value.rendition
+            val cached = if (rendition == Rendition.GUIDED) reading.guided(book.id, topic.startBlock, topic.endBlock) else null
+            val talking = _state.value.phase == SessionPhase.CONVERSATION
+            val playNow = play && !talking
             _state.update {
                 it.copy(
                     topicIndex = index,
@@ -421,28 +465,47 @@ class ReadingSession(
                     guided = cached?.let(GuidedState::Ready) ?: GuidedState.Idle,
                     focusBlock = focus,
                     suggestions = if (keepSuggestions) it.suggestions else emptyList(),
-                    phase = if (play) SessionPhase.LISTENING else if (it.phase == SessionPhase.CONVERSATION) it.phase else PhaseRules.idlePhase(it.mode),
+                    phase = when {
+                        talking -> it.phase
+                        playNow -> SessionPhase.LISTENING
+                        else -> PhaseRules.idlePhase(it.mode)
+                    },
                 )
             }
-            rebuildSentences(position, play)
-            if (s.rendition == Rendition.GUIDED && cached == null) ensureGuided()
-            saveProgress()
+            rebuildSentences(position, playNow)
+            if (rendition == Rendition.GUIDED && cached == null) ensureGuided()
+            if (persist) saveProgress()
             if (!keepSuggestions && _state.value.mode == ReadMode.READ) refreshSuggestions(index)
         }.also { loadJob = it }
     }
 
-    /** Recomputes narration sentences for the current rendition and reloads narration at [position]. */
+    /**
+     * Recomputes narration sentences for the current rendition and reloads narration at [position].
+     * While a guided rendition is still being generated, playback waits for it instead of reading the original aloud.
+     */
     private fun rebuildSentences(position: ReadingPosition, play: Boolean) {
         val s = _state.value
         val book = s.book ?: return
         val topic = s.topic ?: return
         val guided = (s.guided as? GuidedState.Ready)?.content
-        val sentences = if (s.rendition == Rendition.GUIDED && guided != null) Sentences.fromGuided(guided, topic.startBlock)
-        else Sentences.fromBlocks(s.blocks)
+        val sentences = sentencesFor(s)
         val index = Sentences.indexAt(sentences, position)
+        // State first: when narration.load reports the new index it already matches, so nothing is applied to the wrong list.
         _state.update { it.copy(sentences = sentences, sentenceIndex = index) }
         narration.load(NarrationRequest(book.title, topic.title, sentences.map { it.text }, index))
-        if (play) narration.play()
+        val waitingForGuided = s.rendition == Rendition.GUIDED && guided == null && s.guided !is GuidedState.Failed
+        when {
+            !play -> Unit
+            waitingForGuided -> playWhenGuidedReady = true
+            else -> narration.play()
+        }
+    }
+
+    /** Narration sentences for the current topic and rendition (original text while guided is not ready). */
+    private fun sentencesFor(s: SessionState): List<Sentence> {
+        val guided = (s.guided as? GuidedState.Ready)?.content
+        return if (s.rendition == Rendition.GUIDED && guided != null) Sentences.fromGuided(guided, s.topic?.startBlock ?: 0)
+        else Sentences.fromBlocks(s.blocks)
     }
 
     private fun ensureGuided() {
@@ -453,28 +516,36 @@ class ReadingSession(
         guidedJob = scope.launch {
             val book = s.book ?: return@launch
             val cached = reading.guided(book.id, topic.startBlock, topic.endBlock)
-            if (cached == null && settings.current().aiMode == AiMode.OFF) {
-                _state.update { it.copy(guided = GuidedState.Failed("Guided content needs AI. Turn on AI in Settings, or keep reading the original.")) }
-                return@launch
+            val result = when {
+                cached != null -> GuidedState.Ready(cached)
+                settings.current().aiMode == AiMode.OFF ->
+                    GuidedState.Failed("Guided content needs AI. Turn on AI in Settings, or keep reading the original.")
+                else -> {
+                    _state.update { it.copy(guided = GuidedState.Loading) }
+                    val context = readingContext() ?: return@launch
+                    try {
+                        GuidedState.Ready(guidedGenerator.guidedFor(context))
+                    } catch (e: AiException) {
+                        GuidedState.Failed(e.userMessage)
+                    }
+                }
             }
-            _state.update { it.copy(guided = GuidedState.Loading) }
-            val context = readingContext() ?: return@launch
-            val result = cached?.let(GuidedState::Ready) ?: try {
-                GuidedState.Ready(guidedGenerator.guidedFor(context))
-            } catch (e: AiException) {
-                GuidedState.Failed(e.userMessage)
-            }
-            if (_state.value.topic != topic) return@launch
-            val position = _state.value.position
-            val wasPlaying = isPlaying()
+            val now = _state.value
+            if (now.topic != topic) return@launch
             _state.update { it.copy(guided = result) }
-            if (result is GuidedState.Ready && _state.value.rendition == Rendition.GUIDED) rebuildSentences(position, wasPlaying)
+            // During a conversation the new text waits; endConversation rebuilds when the saved sentence is gone.
+            if (now.rendition != Rendition.GUIDED || now.phase == SessionPhase.CONVERSATION) return@launch
+            val play = playWhenGuidedReady || isPlaying()
+            playWhenGuidedReady = false
+            // On failure the original sentences are already loaded; start them if playback was requested.
+            if (result is GuidedState.Ready) rebuildSentences(now.position, play) else if (play) narration.play()
         }
     }
 
     private fun saveProgress() {
         val s = _state.value
         val book = s.book ?: return
+        if (s.sentences.isEmpty()) return // not loaded yet: never overwrite real progress with a default position
         val p = s.position
         scope.launch {
             reading.saveProgress(ProgressEntity(book.id, p.blockIndex, p.charOffset, s.rendition, s.mode, clock()))

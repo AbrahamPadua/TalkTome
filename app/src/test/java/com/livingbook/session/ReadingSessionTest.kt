@@ -297,6 +297,59 @@ class ReadingSessionTest {
     }
 
     @Test
+    fun `media buttons and topic ends are ignored while talking`() = runBlocking {
+        val session = newSession()
+        session.open(BOOK)
+        session.await { it.ready() }
+        session.play()
+        session.beginConversation()
+        narration.events.emit(NarrationEvent.TopicFinished)
+        narration.events.emit(NarrationEvent.NextTopicRequested)
+        val s = session.state.value
+        assertEquals(0, s.topicIndex)
+        assertEquals(SessionPhase.CONVERSATION, s.phase)
+        assertEquals(NarrationStatus.PAUSED, narration.state.value.status)
+    }
+
+    @Test
+    fun `guided text that arrives during a conversation waits and then resumes cleanly`() = runBlocking {
+        guided.gate = kotlinx.coroutines.CompletableDeferred()
+        val session = newSession()
+        session.open(BOOK)
+        session.await { it.ready() }
+        session.setRendition(Rendition.GUIDED)
+        session.play() // waits for the guided text instead of reading the original aloud
+        assertEquals(0, narration.playCount)
+        session.beginConversation()
+        guided.gate!!.complete(Unit)
+        session.await { it.guided is GuidedState.Ready }
+        assertEquals(0, narration.playCount)
+        assertEquals(SessionPhase.CONVERSATION, session.state.value.phase)
+
+        session.endConversation(resume = true)
+        val s = session.await { it.phase == SessionPhase.LISTENING && it.sentences.first().text.startsWith("In short") }
+        assertEquals(NarrationStatus.PLAYING, narration.state.value.status)
+        assertEquals(0, s.sentenceIndex)
+    }
+
+    @Test
+    fun `chained citation jumps return to the original place without saving the detour`() = runBlocking {
+        val session = newSession()
+        session.open(BOOK)
+        session.await { it.ready() }
+        narration.reachSentence(2)
+        awaitProgress { it.blockIndex == 1 }
+        session.goToBlock(4)
+        session.await { it.focusBlock == 4 && it.ready() }
+        session.goToBlock(5)
+        session.await { it.focusBlock == 5 && it.ready() }
+        assertEquals(1, reading.progress(BOOK)!!.blockIndex)
+        session.returnToSaved()
+        val back = session.await { it.topicIndex == 0 && it.returnTo == null && it.ready() }
+        assertEquals(2, back.sentenceIndex)
+    }
+
+    @Test
     fun `phase rules`() {
         assertEquals(PhaseRules.TopicEnd.ADVANCE_AND_PLAY, PhaseRules.onTopicFinished(autoplay = true, hasNext = true, hasSuggestions = true))
         assertEquals(PhaseRules.TopicEnd.SHOW_GUIDANCE, PhaseRules.onTopicFinished(autoplay = true, hasNext = false, hasSuggestions = true))
@@ -373,8 +426,10 @@ private class FakeNarration : NarrationService {
 private class FakeGuided : GuidedContentGenerator {
     var fail = false
     var calls = 0
+    var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     override suspend fun guidedFor(context: ReadingContext): GuidedContent {
         calls++
+        gate?.await()
         if (fail) throw AiException("offline")
         return GuidedContent(listOf(GuidedSegment(GuidedKind.RESTATED, "In short, alpha matters.", listOf(context.topic.startBlock + 1))), isMock = false, model = "fake")
     }
