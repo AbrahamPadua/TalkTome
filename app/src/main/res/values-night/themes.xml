@@ -1,0 +1,8 @@
+<resources>
+    <!-- Dark window background so a dark-mode launch does not flash paper white. -->
+    <style name="Theme.LivingBook" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/night_paper</item>
+    </style>
+</resources>

@@ -1,4 +1,5 @@
 <resources>
     <color name="paper">#FFFBF7F0</color>
     <color name="ink">#FF2B2A27</color>
+    <color name="night_paper">#FF151413</color>
 </resources>
