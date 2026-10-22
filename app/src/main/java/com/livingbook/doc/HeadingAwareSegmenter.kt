@@ -58,10 +58,11 @@ class HeadingAwareSegmenter : TopicSegmenter {
         }
         return merged.mapIndexed { index, range ->
             val first = blocks[range.first]
+            val heading = range.asSequence().map { blocks[it] }.takeWhile { it.kind == BlockKind.HEADING }.lastOrNull()
             val sectionTitle = sectionAt[range.first]?.title
             val title = when {
-                first.kind == BlockKind.HEADING -> first.text
-                sectionTitle != null -> "$sectionTitle (continued)"
+                heading != null -> heading.text
+                sectionTitle != null -> clipAtWord(sectionTitle, 60 - " (continued)".length) + " (continued)"
                 else -> clippedSentence(first.text)
             }
             Topic(index, title, range.first, range.last, sectionTitle)
@@ -70,8 +71,13 @@ class HeadingAwareSegmenter : TopicSegmenter {
 
     private fun clippedSentence(text: String): String {
         val sentence = Regex("[.!?](?:\\s|$)").find(text)?.let { text.take(it.range.first + 1) } ?: text
-        if (sentence.length <= 60) return sentence
-        val prefix = sentence.take(60)
+        return clipAtWord(sentence, 60)
+    }
+
+    private fun clipAtWord(text: String, limit: Int): String {
+        if (text.length <= limit) return text
+        val prefix = text.take(limit)
+        if (text[limit].isWhitespace()) return prefix.trimEnd()
         return prefix.substringBeforeLast(' ', prefix).ifBlank { prefix }
     }
 }

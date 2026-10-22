@@ -25,6 +25,25 @@ class HeadingAwareSegmenterTest {
             SourceBlock(0, BlockKind.HEADING, "Subheading", 2), paragraph(190), SourceBlock(0, BlockKind.HEADING, "End", 1)))
         val topics = segmenter.segment(document, Granularity.BITE)
         assertEquals(listOf(0..0, 1..3, 4..4), topics.map { it.startBlock..it.endBlock })
+        assertEquals("Subheading", topics[1].title)
+    }
+
+    @Test fun leadingHeadingsUseTheMostSpecificTitleAndKeepTheEnclosingSection() {
+        val document = book(listOf(SourceBlock(0, BlockKind.HEADING, "Chapter", 1),
+            SourceBlock(0, BlockKind.HEADING, "Section", 2), SourceBlock(0, BlockKind.HEADING, "Specific topic", 3), paragraph()),
+            listOf(ParsedSection("Enclosing chapter", 1, 0)))
+        val topic = segmenter.segment(document, Granularity.BALANCED).single()
+        assertEquals("Specific topic", topic.title)
+        assertEquals("Enclosing chapter", topic.sectionTitle)
+    }
+
+    @Test fun clipsLongContinuedTitlesAtAWordBoundaryBeforeTheCompleteSuffix() {
+        val section = "A long enclosing section with several descriptive words that cannot fit in a topic title"
+        val document = book(listOf(paragraph(180), paragraph(180)), listOf(ParsedSection(section, 1, 0)))
+        val topic = segmenter.segment(document, Granularity.BITE).last()
+        assertEquals("A long enclosing section with several (continued)", topic.title)
+        assertTrue(topic.title.length <= 60)
+        assertEquals(section, topic.sectionTitle)
     }
 
     @Test fun lengthTargetsScaleAndTinyTailsMerge() {
