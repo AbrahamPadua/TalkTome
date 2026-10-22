@@ -1,4 +1,4 @@
-# Living Book (working name)
+# TalkTome
 
 An Android app that turns PDFs and EPUBs into a book you can read or listen to one topic at a time, and talk to
 whenever you want. You can interrupt the narration, ask a question about the passage, get an answer grounded in the
