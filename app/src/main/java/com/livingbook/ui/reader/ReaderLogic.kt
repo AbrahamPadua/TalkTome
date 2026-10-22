@@ -49,3 +49,11 @@ fun contentsRows(topics: List<TopicEntity>): List<ContentsRow> = buildList {
 /** Short text for a bookmark or a preview line. */
 fun snippet(text: String, max: Int = 160): String =
     if (text.length <= max) text else text.take(max).trimEnd() + "…"
+
+/**
+ * While listening, tutoring offers belong to a topic that just finished (autoplay moved on), or to the end of the
+ * book when playback stopped there; never to the topic that is about to be read.
+ */
+fun showListenSuggestions(state: com.livingbook.session.SessionState): Boolean =
+    state.suggestions.isNotEmpty() &&
+        (state.suggestionsTopicIndex != state.topicIndex || state.phase == com.livingbook.session.SessionPhase.OPTIONAL_GUIDANCE)

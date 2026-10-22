@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,8 +76,40 @@ fun ListenPanel(
     extra: @Composable () -> Unit = {},
 ) {
     val playing = narration.status == NarrationStatus.PLAYING
+    // On a short screen (a phone in landscape) the full player would cover all of the text, so it collapses to one row.
+    val compact = LocalConfiguration.current.screenHeightDp < 500
+    val transport: @Composable () -> Unit = {
+        IconButton(onClick = onSkipBack) { Icon(Icons.Filled.FastRewind, contentDescription = "Previous sentence") }
+        FilledIconButton(onClick = onTogglePlay, modifier = Modifier.size(if (compact) 48.dp else 64.dp)) {
+            Icon(
+                if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                contentDescription = if (playing) "Pause" else "Play",
+                modifier = Modifier.size(if (compact) 24.dp else 32.dp),
+            )
+        }
+        IconButton(onClick = onSkipForward) { Icon(Icons.Filled.FastForward, contentDescription = "Next sentence") }
+    }
+    val progress: @Composable () -> Unit = {
+        if (state.sentences.isNotEmpty()) {
+            Text(
+                "Sentence ${state.sentenceIndex + 1} of ${state.sentences.size}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    val speeds: @Composable () -> Unit = {
+        SPEEDS.forEach { speed ->
+            FilterChip(selected = abs(rate - speed) < 0.01f, onClick = { onRate(speed) }, label = { Text(rateLabel(speed)) })
+        }
+        AssistChip(
+            onClick = onVoice,
+            label = { Text("Voice") },
+            leadingIcon = { Icon(Icons.Outlined.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        )
+    }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        extra()
+        if (!compact) extra()
         narration.errorMessage?.let {
             Text(
                 it,
@@ -86,37 +119,24 @@ fun ListenPanel(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            IconButton(onClick = onSkipBack) { Icon(Icons.Filled.FastRewind, contentDescription = "Previous sentence") }
-            FilledIconButton(onClick = onTogglePlay, modifier = Modifier.size(64.dp)) {
-                Icon(
-                    if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                    contentDescription = if (playing) "Pause" else "Play",
-                    modifier = Modifier.size(32.dp),
-                )
+        if (compact) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                transport()
+                progress()
+                speeds()
             }
-            IconButton(onClick = onSkipForward) { Icon(Icons.Filled.FastForward, contentDescription = "Next sentence") }
-        }
-        if (state.sentences.isNotEmpty()) {
-            Text(
-                "Sentence ${state.sentenceIndex + 1} of ${state.sentences.size}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SPEEDS.forEach { speed ->
-                FilterChip(selected = abs(rate - speed) < 0.01f, onClick = { onRate(speed) }, label = { Text(rateLabel(speed)) })
-            }
-            AssistChip(
-                onClick = onVoice,
-                label = { Text("Voice") },
-                leadingIcon = { Icon(Icons.Outlined.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            )
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) { transport() }
+            progress()
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) { speeds() }
         }
     }
 }

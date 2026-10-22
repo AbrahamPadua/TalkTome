@@ -11,7 +11,9 @@ import com.livingbook.model.GuidedSegment
 import com.livingbook.session.Sentences
 import com.livingbook.speech.Sentence
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderLogicTest {
@@ -84,6 +86,16 @@ class ReaderLogicTest {
     @Test
     fun rateLabelsDropTrailingZero() {
         assertEquals(listOf("0.8×", "1×", "1.25×", "1.5×", "2×"), SPEEDS.map(::rateLabel))
+    }
+
+    @Test
+    fun listenSuggestionsOnlyAfterATopicFinishes() {
+        val offer = listOf(com.livingbook.ai.TutorSuggestion(com.livingbook.ai.TutorAction.EXPLAIN, "Explain"))
+        val base = com.livingbook.session.SessionState(topicIndex = 2, suggestions = offer, suggestionsTopicIndex = 2, phase = com.livingbook.session.SessionPhase.LISTENING)
+        assertFalse("not for the topic about to be read", showListenSuggestions(base))
+        assertTrue("for the topic autoplay just left", showListenSuggestions(base.copy(suggestionsTopicIndex = 1)))
+        assertTrue("at the end, when playback stopped", showListenSuggestions(base.copy(phase = com.livingbook.session.SessionPhase.OPTIONAL_GUIDANCE)))
+        assertFalse(showListenSuggestions(base.copy(suggestions = emptyList(), suggestionsTopicIndex = 1)))
     }
 
     @Test

@@ -222,7 +222,7 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                         onRate = session::setRate,
                         onVoice = { voicePickerOpen = true },
                         extra = {
-                            if (state.suggestions.isNotEmpty()) {
+                            if (showListenSuggestions(state)) {
                                 // Offered while narration keeps playing; nothing pauses until a chip is tapped.
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
