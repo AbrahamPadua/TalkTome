@@ -11,6 +11,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
@@ -27,27 +28,33 @@ class ProxyLlmProvider(
         if (base.isEmpty()) throw AiException(NO_URL)
         if (!s.aiConsent) throw AiException(NO_CONSENT)
         val url = "$base/v1/complete".toHttpUrlOrNull()
-            ?: throw AiException("The AI proxy address in Settings isn't a valid web address. It should look like http://192.168.1.20:8787.")
+            ?: throw AiException("The AI proxy address in Settings isn't a valid web address. It should look like https://proxy.example.com or http://192.168.1.20:8787.")
+        // The token and book excerpts would travel in clear text, so plain HTTP is only allowed inside the local network.
+        if (!url.isHttps && !isLocalHost(url.host)) throw AiException(NOT_HTTPS)
         val body = json.encodeToString(
             WireRequest.serializer(),
             WireRequest(request.system, request.messages.map { WireMessage(it.role, it.content) }, request.maxTokens),
         )
-        val call = client.newCall(
-            Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer ${s.proxyToken.trim()}")
-                .post(body.toRequestBody(JSON))
-                .build()
-        )
+        val call = try {
+            client.newCall(
+                Request.Builder()
+                    .url(url)
+                    .header("Authorization", "Bearer ${s.proxyToken.trim()}")
+                    .post(body.toRequestBody(JSON))
+                    .build()
+            )
+        } catch (e: IllegalArgumentException) {
+            throw AiException("The proxy URL or token in Settings contains characters that can't be sent. Check both and try again.", e)
+        }
         val (code, text) = try {
-            runInterruptible(Dispatchers.IO) { call.execute().use { it.code to it.body.string() } }
+            runInterruptible(Dispatchers.IO) { call.execute().use { it.code to it.body.source().readCapped() } }
         } catch (e: SocketTimeoutException) {
             throw AiException("The AI service took too long to answer. Try again, or ask a shorter question.", e)
         } catch (e: IOException) {
             throw AiException(UNREACHABLE, e)
         }
         if (code !in 200..299) throw AiException(messageForStatus(code))
-        val reply = runCatching { json.decodeFromString(WireResponse.serializer(), text) }.getOrNull()
+        val reply = text?.let { runCatching { json.decodeFromString(WireResponse.serializer(), it) }.getOrNull() }
         if (reply == null || reply.text.isBlank()) {
             throw AiException("The AI service sent a reply the app couldn't read. Check that your proxy is up to date.")
         }
@@ -71,6 +78,20 @@ class ProxyLlmProvider(
         const val NO_URL = "Set up your AI proxy in Settings."
         const val NO_CONSENT = "AI answers send short excerpts of this book to your AI service. Review what is sent and turn on AI consent in Settings first."
         const val UNREACHABLE = "Can't reach the AI service. Reading and narration still work offline."
+        const val NOT_HTTPS = "Use an https:// proxy URL, or a local network address such as http://192.168.1.20:8787."
+        const val MAX_RESPONSE_BYTES = 1024L * 1024
+
+        /** Loopback, private IPv4 ranges (10.0.2.2 is the Android emulator's host) and mDNS *.local names. */
+        internal fun isLocalHost(host: String): Boolean {
+            val h = host.lowercase()
+            if (h == "localhost" || h == "::1" || h.endsWith(".local")) return true
+            val o = h.split('.').map { it.toIntOrNull() ?: return false }
+            if (o.size != 4) return false
+            return o[0] == 127 || o[0] == 10 || (o[0] == 172 && o[1] in 16..31) || (o[0] == 192 && o[1] == 168)
+        }
+
+        /** The body as text, or null when it is over [MAX_RESPONSE_BYTES]. */
+        private fun BufferedSource.readCapped(): String? = if (request(MAX_RESPONSE_BYTES + 1)) null else readUtf8()
 
         internal fun messageForStatus(code: Int): String = when (code) {
             401, 403 -> "Your AI proxy rejected the access token. Check the proxy token in Settings."
@@ -85,7 +106,7 @@ class ProxyLlmProvider(
         private val json = Json { ignoreUnknownKeys = true }
         private val defaultClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(90, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
             .build()
     }
 }
