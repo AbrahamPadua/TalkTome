@@ -106,6 +106,8 @@ enum class GuidedKind {
     RESTATED,
     /** Added by the AI: analogy, example, transition. Visibly marked as added. */
     ADDED,
+    /** Verbatim text from the source. Only kept if it matches the source exactly; otherwise downgraded to RESTATED. */
+    QUOTED,
 }
 
 @Serializable
