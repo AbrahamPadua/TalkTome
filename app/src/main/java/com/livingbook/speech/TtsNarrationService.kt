@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
@@ -82,6 +84,7 @@ class TtsNarrationService(private val context: Context) : NarrationService {
     private var holdingFocus = false
     private var resumeOnFocusGain = false
     private var controller: ListenableFuture<MediaController>? = null
+    private val silence = SilentTrack()
 
     override fun load(request: NarrationRequest) {
         // A new topic never inherits a queued or after-a-call play from the old one.
@@ -309,13 +312,55 @@ class TtsNarrationService(private val context: Context) : NarrationService {
         if (release && _state.value.status != NarrationStatus.PLAYING) releaseFocus()
     }
 
-    private fun publish(status: NarrationStatus, error: String? = null) = _state.update {
-        it.copy(
+    private fun publish(status: NarrationStatus, error: String? = null) {
+        if (status == NarrationStatus.PLAYING) silence.start() else silence.stop()
+        _state.update { it.copy(
             status = status,
             sentenceIndex = queue.index,
             sentenceCount = queue.size,
             errorMessage = error ?: it.errorMessage.takeIf { status == NarrationStatus.ERROR },
-        )
+        ) }
+    }
+
+    /**
+     * Loops silence in this app's own process while narrating. The speech itself plays in the TTS engine's process, so
+     * without this Android sends headset and media keys to whichever app last played audio (often a music app).
+     */
+    private class SilentTrack {
+        private var track: AudioTrack? = null
+
+        fun start() {
+            if (track != null) return
+            val frames = SAMPLE_RATE / 10
+            track = runCatching {
+                AudioTrack.Builder()
+                    .setAudioAttributes(AUDIO_ATTRIBUTES)
+                    .setAudioFormat(
+                        AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()
+                    )
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .setBufferSizeInBytes(frames * 2)
+                    .build()
+                    .apply {
+                        write(ShortArray(frames), 0, frames)
+                        setLoopPoints(0, frames, -1)
+                        play()
+                    }
+            }.getOrNull()
+        }
+
+        fun stop() {
+            track?.run {
+                runCatching { stop() }
+                release()
+            }
+            track = null
+        }
+
+        private companion object {
+            const val SAMPLE_RATE = 8000
+        }
     }
 
     // ---- Audio focus and the media service ----------------------------------------------------------------------
