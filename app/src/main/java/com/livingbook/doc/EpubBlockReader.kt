@@ -43,7 +43,8 @@ internal class EpubBlockReader(
             tag == "figcaption" || tag == "caption" -> flow(element, BlockKind.CAPTION)
             tag == "math" -> {
                 markDescendants(element)
-                emit(BlockKind.EQUATION, element.attr("alttext").ifBlank { element.text() }, element)
+                emit(if (isDisplayMath(element)) BlockKind.EQUATION else BlockKind.PARAGRAPH,
+                    element.attr("alttext").ifBlank { element.text() }, element)
             }
             tag == "table" -> {
                 element.getAllElements().filter { candidate ->
@@ -78,6 +79,22 @@ internal class EpubBlockReader(
 
     private fun markDescendants(element: Element) = element.getAllElements().forEach { anchor(it) }
 
+    private fun isDisplayMath(math: Element): Boolean {
+        if (math.attr("display").equals("block", ignoreCase = true)) return true
+        val block = math.parents().firstOrNull { it.isBlock || it.localTag() in containers } ?: return false
+        fun meaningful(node: org.jsoup.nodes.Node): Boolean = when (node) {
+            math -> false
+            is TextNode -> node.wholeText.isNotBlank()
+            is Element -> when (node.localTag()) {
+                "head", "script", "style", "br" -> false
+                "math", "img", "svg", "table" -> true
+                else -> node.childNodes().any(::meaningful)
+            }
+            else -> false
+        }
+        return !block.childNodes().any(::meaningful)
+    }
+
     private fun readableText(element: Element): String = buildString {
         fun appendNode(node: org.jsoup.nodes.Node) {
             when (node) {
@@ -110,6 +127,11 @@ internal class EpubBlockReader(
                     val tag = node.localTag()
                     if (tag in setOf("head", "script", "style")) continue
                     if (inFigure && tag in setOf("img", "svg")) continue
+                    if (tag == "math" && !isDisplayMath(node)) {
+                        markDescendants(node)
+                        text.append(node.attr("alttext").ifBlank { node.text() })
+                        continue
+                    }
                     val foldedParagraph = tag == "p" && kind in setOf(BlockKind.LIST_ITEM, BlockKind.QUOTE, BlockKind.FOOTNOTE)
                     val special = tag in setOf("img", "figure", "svg", "math", "table", "figcaption", "pre", "li", "blockquote") ||
                         tag.matches(Regex("h[1-6]")) || "footnote" in node.attr("epub:type").split(Regex("\\s+"))

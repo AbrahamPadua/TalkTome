@@ -27,7 +27,7 @@ class EpubDocumentParserTest {
             "OPS/book.opf" to """<package xmlns:dc="http://purl.org/dc/elements/1.1/">
                 <metadata><dc:title>Test book</dc:title><dc:creator>Author</dc:creator></metadata><manifest>
                 <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
-                ${if (nav != null) "<item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>" else ""}
+                ${if (nav != null) "<item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='scripted nav'/>" else ""}
                 ${if (ncx != null) "<item id='ncx' href='toc.ncx' media-type='application/x-dtbncx+xml'/>" else ""}
                 $items</manifest><spine toc="ncx">$spine</spine></package>""",
             "OPS/chapter.xhtml" to "<html xmlns:epub='http://www.idpf.org/2007/ops'><body>$body</body></html>",
@@ -84,13 +84,13 @@ class EpubDocumentParserTest {
             </section>"""))
         assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.LIST_ITEM, BlockKind.LIST_ITEM, BlockKind.QUOTE,
             BlockKind.CODE, BlockKind.TABLE, BlockKind.CAPTION, BlockKind.FIGURE, BlockKind.CAPTION,
-            BlockKind.PARAGRAPH, BlockKind.EQUATION, BlockKind.PARAGRAPH, BlockKind.FOOTNOTE, BlockKind.FIGURE, BlockKind.FIGURE),
+            BlockKind.PARAGRAPH, BlockKind.FOOTNOTE, BlockKind.FIGURE, BlockKind.FIGURE),
             book.blocks.map { it.kind })
         assertEquals("List paragraph. More list text.", book.blocks[1].text)
         assertEquals("A | B\n1 | 2", book.blocks[5].text)
         assertEquals("Figure: A useful diagram", book.blocks[7].text)
-        assertEquals("x squared", book.blocks[10].text)
-        assertEquals("Figure: Vector drawing", book.blocks[13].text)
+        assertEquals("Before x squared after.", book.blocks[9].text)
+        assertEquals("Figure: Vector drawing", book.blocks[11].text)
         assertEquals("Figure (no description)", book.blocks.last().text)
         assertEquals(book.blocks.indices.toList(), book.blocks.map { it.index })
     }
@@ -104,6 +104,35 @@ class EpubDocumentParserTest {
     @Test fun skipsClearlyAuxiliaryNonLinearNav() = runBlocking {
         val book = parser.parse(epub(spine = "<itemref idref='nav' linear='no'/><itemref idref='chapter'/>"))
         assertEquals(2, book.blocks.size)
+    }
+
+    @Test fun skipsLinearNavAndNcxButUsesTheirSectionTitles() = runBlocking {
+        val ncx = "<ncx><navMap><navPoint><navLabel><text>NCX chapter</text></navLabel><content src='chapter.xhtml#start'/></navPoint></navMap></ncx>"
+        for (nav in listOf("<nav epub:type='toc'><ol><li><a href='chapter.xhtml#start'>Nav chapter</a></li></ol></nav>", null)) {
+            val book = parser.parse(epub(nav = nav, ncx = ncx,
+                spine = (if (nav != null) "<itemref idref='nav'/>" else "") + "<itemref idref='ncx'/><itemref idref='chapter'/>"))
+            assertEquals(listOf(BlockKind.HEADING, BlockKind.PARAGRAPH), book.blocks.map { it.kind })
+            assertEquals(if (nav != null) "Nav chapter" else "NCX chapter", book.sections.single().title)
+            assertEquals(0, book.sections.single().startBlock)
+        }
+    }
+
+    @Test fun keepsInlineMathInProseAndOnlyPromotesDisplayOrStandaloneMath() = runBlocking {
+        val nav = "<nav epub:type='toc'><ol><li><a href='chapter.xhtml#inline'>Inline</a></li><li><a href='chapter.xhtml#standalone'>Standalone</a></li></ol></nav>"
+        val book = parser.parse(epub(nav = nav, body = """
+            <p>Use <span><math id="inline" display="inline" alttext="x squared"><mi>x</mi></math></span>, then <math><mi>y</mi></math>.</p>
+            <p>Before <math display="block" alttext="a equals b"><mi>a</mi><mo>=</mo><mi>b</mi></math> after.</p>
+            <div> <span><math id="standalone"><mi>z</mi></math></span> <br/> </div>
+            <p><math><mi>a</mi></math> + <math><mi>b</mi></math></p>
+            <p><math><mi>c</mi></math><img alt="diagram"/></p>
+            """))
+        assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.PARAGRAPH, BlockKind.EQUATION,
+            BlockKind.PARAGRAPH, BlockKind.EQUATION, BlockKind.PARAGRAPH, BlockKind.PARAGRAPH, BlockKind.FIGURE),
+            book.blocks.map { it.kind })
+        assertEquals(listOf("Use x squared, then y.", "Before", "a equals b", "after.", "z", "a + b", "c", "Figure: diagram"),
+            book.blocks.map { it.text })
+        assertEquals(book.blocks.indices.toList(), book.blocks.map { it.index })
+        assertEquals(listOf(0, 4), book.sections.map { it.startBlock })
     }
 
     @Test fun rejectsRightsAndNonFontEncryption() = runBlocking {
