@@ -350,6 +350,28 @@ class ReadingSessionTest {
     }
 
     @Test
+    fun `lock screen controls and interruptions are reflected in the session`() = runBlocking {
+        val session = newSession()
+        session.open(BOOK)
+        session.await { it.ready() }
+        narration.play() // e.g. the headset play button
+        assertEquals(SessionPhase.LISTENING, session.state.value.phase)
+        assertEquals(ReadMode.LISTEN, session.state.value.mode)
+        narration.pause()
+        assertEquals(SessionPhase.PAUSED, session.state.value.phase)
+
+        session.play()
+        narration.pause()
+        narration.events.emit(NarrationEvent.Interrupted("Paused for a call"))
+        assertEquals("Paused for a call", session.state.value.message)
+
+        session.beginConversation()
+        narration.play()
+        assertEquals(NarrationStatus.PAUSED, narration.state.value.status)
+        assertEquals(SessionPhase.CONVERSATION, session.state.value.phase)
+    }
+
+    @Test
     fun `phase rules`() {
         assertEquals(PhaseRules.TopicEnd.ADVANCE_AND_PLAY, PhaseRules.onTopicFinished(autoplay = true, hasNext = true, hasSuggestions = true))
         assertEquals(PhaseRules.TopicEnd.SHOW_GUIDANCE, PhaseRules.onTopicFinished(autoplay = true, hasNext = false, hasSuggestions = true))

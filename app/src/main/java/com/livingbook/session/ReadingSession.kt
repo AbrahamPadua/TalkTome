@@ -133,9 +133,23 @@ class ReadingSession(
 
     init {
         scope.launch {
+            var lastStatus = narration.state.value.status
             narration.state.collect { n ->
                 val s = _state.value
-                if (s.book == null || s.phase == SessionPhase.CONVERSATION) return@collect
+                val statusChanged = n.status != lastStatus
+                lastStatus = n.status
+                if (s.book == null) return@collect
+                if (s.phase == SessionPhase.CONVERSATION) {
+                    // A headset or lock-screen play during a conversation must not talk over it.
+                    if (statusChanged && n.status == NarrationStatus.PLAYING) narration.pause()
+                    return@collect
+                }
+                // Follow play/pause issued outside the app (lock screen, headset, notification).
+                if (statusChanged && n.status == NarrationStatus.PLAYING && s.phase != SessionPhase.LISTENING) {
+                    _state.update { it.copy(mode = ReadMode.LISTEN, phase = SessionPhase.LISTENING) }
+                } else if (statusChanged && n.status == NarrationStatus.PAUSED && s.phase == SessionPhase.LISTENING && !playWhenGuidedReady) {
+                    _state.update { it.copy(phase = SessionPhase.PAUSED) }
+                }
                 if (n.sentenceIndex != s.sentenceIndex && n.sentenceIndex in s.sentences.indices) {
                     _state.update { it.copy(sentenceIndex = n.sentenceIndex) }
                     saveProgress()
@@ -424,7 +438,7 @@ class ReadingSession(
             NarrationEvent.PreviousTopicRequested -> previousTopic()
             is NarrationEvent.Interrupted -> {
                 playWhenGuidedReady = false
-                if (s.phase != SessionPhase.CONVERSATION) _state.update { it.copy(phase = SessionPhase.PAUSED) }
+                if (s.phase != SessionPhase.CONVERSATION) _state.update { it.copy(phase = SessionPhase.PAUSED, message = event.reason) }
                 saveProgress()
             }
         }
