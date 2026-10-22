@@ -9,7 +9,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 
 /** One extracted visual line, with coordinates measured from the top left of its page. */
-internal data class PdfLine(val text: String, val page: Int, val fontSize: Float, val x: Float, val y: Float)
+internal data class PdfLine(val text: String, val page: Int, val fontSize: Float, val x: Float, val y: Float, val bold: Boolean = false)
 
 internal data class PdfPage(val number: Int, val height: Float, val hasImages: Boolean)
 internal data class PdfBookmark(val title: String, val page: Int, val level: Int)
@@ -35,12 +35,17 @@ internal class PdfStructurer {
         }.keys
         val retained = readable.filterNot { edge(it) && (it.text.trim().matches(Regex("\\d+")) || signature(it) in repeats) }
         val bodySize = median(retained.filter { it.fontSize > 0 }.map { it.fontSize }).coerceAtLeast(1f)
-        fun isHeading(line: PdfLine) = line.text.trim().length < 100 && !line.text.trim().endsWith('.') &&
-            line.fontSize >= bodySize * 1.2f && !isEquation(line.text)
+        fun isHeading(line: PdfLine): Boolean {
+            val text = line.text.trim()
+            return !text.endsWith('.') && !isEquation(text) &&
+                ((text.length < 100 && line.fontSize >= bodySize * 1.2f) || (text.length < 90 && line.bold))
+        }
         val headingSizes = retained.filter(::isHeading).map { it.fontSize }.sortedDescending().fold(mutableListOf<Float>()) { sizes, size ->
             if (sizes.none { abs(it - size) < .5f }) sizes += size
             sizes
         }
+        val sentenceEnd = Regex("""[.!?]["'’”)]*$""")
+        val bulletStart = Regex("""^(?:[-+*•◦▪]\s+|\d+[.)]\s+)""")
         val blocks = mutableListOf<SourceBlock>()
         fun emit(kind: BlockKind, text: String, page: Int, level: Int = 0) {
             blocks += SourceBlock(blocks.size, kind, text, level, page)
@@ -55,7 +60,33 @@ internal class PdfStructurer {
                 if (paragraph.isNotEmpty()) emit(BlockKind.PARAGRAPH, paragraph.toString(), page.number)
                 paragraph.setLength(0)
             }
-            for (line in pageLines) {
+            fun fragment(line: PdfLine): Boolean {
+                val text = line.text.trim()
+                return text.length < 45 && !sentenceEnd.containsMatchIn(text) &&
+                    !isHeading(line) && !isEquation(text) && !bulletStart.containsMatchIn(text)
+            }
+            var i = 0
+            var fragmentEnd = 0
+            while (i < pageLines.size) {
+                val line = pageLines[i]
+                val runStart = i >= fragmentEnd
+                if (runStart) {
+                    fragmentEnd = i
+                    while (fragmentEnd < pageLines.size && fragment(pageLines[fragmentEnd])) fragmentEnd++
+                }
+                val fragments = pageLines.subList(i, fragmentEnd)
+                // Column shifts or overlapping baselines distinguish table fragments from wrapped prose.
+                val fragmentedLayout = runStart && fragments.size >= 4 &&
+                    (fragments.zipWithNext().count { (a, b) -> abs(b.x - a.x) > bodySize * 1.2f } >= 2 ||
+                        fragments.zipWithNext().any { (a, b) -> b.y <= a.y })
+                if (fragmentedLayout) {
+                    flush()
+                    emit(BlockKind.TABLE, fragments.joinToString("\n") { it.text.trim() }, page.number)
+                    previous = null
+                    i = fragmentEnd
+                    continue
+                }
+                i++
                 val text = line.text.trim().replace(Regex("\\s+"), " ")
                 when {
                     isEquation(line.text) -> {

@@ -52,8 +52,9 @@ class EpubDocumentParser : DocumentParser {
         for (ref in opf.getAllElements().filter { it.localTag() == "itemref" }) {
             val item = manifest[ref.attr("idref")]
                 ?: throw DocumentException("This EPUB has a missing reading section. Try another copy.")
+            if ("nav" in item.properties || item.mediaType == "application/x-dtbncx+xml") continue
             val path = item.path.substringBefore('#')
-            val clearlyAuxiliary = "nav" in item.properties || "cover-image" in item.properties || path in coverPaths
+            val clearlyAuxiliary = "cover-image" in item.properties || path in coverPaths
             if (ref.attr("linear").equals("no", true) && clearlyAuxiliary) continue
             if (zip.getEntry(path) == null) throw DocumentException("This EPUB is missing $path. Try another copy.")
             val start = blocks.size
