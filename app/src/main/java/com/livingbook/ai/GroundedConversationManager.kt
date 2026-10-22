@@ -37,7 +37,7 @@ class GroundedConversationManager(
     override fun messages(conversationId: Long): Flow<List<ChatMessage>> = conversations.observeMessages(conversationId)
 
     override suspend fun send(conversationId: Long, context: ReadingContext, userText: String, action: TutorAction): ChatMessage {
-        val history = conversations.messages(conversationId)
+        val history = storedMessages(conversationId)
         conversations.append(conversationId, ChatRole.USER, userText)
         val reply = try {
             recordRequestSignals(context, userText, action)
@@ -49,13 +49,15 @@ class GroundedConversationManager(
         } catch (e: Exception) {
             note("Something went wrong while answering. Your place in the book is safe; please try again.")
         }
-        lastAction[conversationId] = action
+        // Only a real answer can have asked the question the reader replies to next.
+        if (reply.role == ChatRole.ASSISTANT && !reply.isMock) lastAction[conversationId] = action
         val id = conversations.append(conversationId, reply.role, reply.text, reply.segments, reply.isMock)
-        return conversations.messages(conversationId).first { it.id == id }
+        return storedMessages(conversationId).firstOrNull { it.id == id }
+            ?: ChatMessage(id, reply.role, reply.text, reply.segments, reply.isMock, System.currentTimeMillis())
     }
 
     override suspend fun remember(conversationId: Long, context: ReadingContext): String {
-        val text = conversations.messages(conversationId).lastOrNull { it.role == ChatRole.ASSISTANT }?.text
+        val text = storedMessages(conversationId).lastOrNull { it.role == ChatRole.ASSISTANT && !it.isMock }?.text
             ?: context.currentSentence
             ?: context.topic.title
         reading.addAnnotation(
@@ -94,13 +96,14 @@ class GroundedConversationManager(
             action = action,
             assessAnswer = lastAction[id] in PromptBuilder.ASSESSED_ACTIONS,
         )
-        val turns = history.filter { it.role != ChatRole.NOTE }
+        // Demo replies are not the model's words, so they never go back to it as assistant turns.
+        val turns = history.filter { it.role != ChatRole.NOTE && !it.isMock }
             .takeLast(HISTORY)
             .dropWhile { it.role != ChatRole.USER }
             .map { LlmMessage(if (it.role == ChatRole.USER) "user" else "assistant", it.text) }
         val result = provider.complete(LlmRequest(PromptBuilder.SYSTEM, turns + LlmMessage("user", prompt.text)))
         val parsed = ResponseParser.parseAnswer(result.text, prompt.sentBlocks)
-        if (parsed.segments.isEmpty()) return note("The AI service sent an empty reply. Please try asking again.")
+        if (parsed.segments.isEmpty()) return note("The AI service didn't send a usable answer. Please try asking again.")
         parsed.assessment?.let { a ->
             val kind = if (a.understood) SignalKind.UNDERSTOOD else SignalKind.STRUGGLE
             val evidence = if (a.understood) "Answered a check-in question correctly in “${context.topic.title}”."
@@ -124,6 +127,15 @@ class GroundedConversationManager(
         val text = if (asked.isEmpty()) "We haven't discussed anything in this topic yet."
         else "So far you asked: ${asked.joinToString(", ")}."
         return note(text)
+    }
+
+    /** Stored messages, or none if a row can't be read, so [send] never fails on a lookup. */
+    private suspend fun storedMessages(conversationId: Long): List<ChatMessage> = try {
+        conversations.messages(conversationId)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
     }
 
     private fun assistant(segments: List<AnswerSegment>, isMock: Boolean = false) =
