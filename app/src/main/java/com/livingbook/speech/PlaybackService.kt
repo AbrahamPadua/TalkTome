@@ -27,7 +27,11 @@ class PlaybackService : MediaSessionService() {
 
     // Swiping the app away ends the service unless narration is playing, which carries on in the background.
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (!isPlaybackOngoing) pauseAllPlayersAndStopSelf()
+        if (!isPlaybackOngoing) {
+            // The app's own controller keeps the service bound; drop it or the service can never stop.
+            ((application as LivingBookApp).container.narration as TtsNarrationService).releaseController()
+            pauseAllPlayersAndStopSelf()
+        }
     }
 
     override fun onDestroy() {

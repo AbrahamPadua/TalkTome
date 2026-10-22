@@ -209,6 +209,39 @@ class TtsNarrationServiceTest {
     }
 
     @Test
+    fun aSecondTransientLossStillResumesAfterTheCall() {
+        initEngine()
+        loadAndPlay()
+        val focus = shadowOf(context.getSystemService(AudioManager::class.java)).lastAudioFocusRequest.listener
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) // ringing
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) // answered
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        assertEquals(NarrationStatus.PLAYING, narration.state.value.status)
+    }
+
+    @Test
+    fun navigationPromptsPauseAndResumeInsteadOfTalkingOver() {
+        initEngine()
+        loadAndPlay()
+        val focus = shadowOf(context.getSystemService(AudioManager::class.java)).lastAudioFocusRequest.listener
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+        assertEquals(NarrationStatus.PAUSED, narration.state.value.status)
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        assertEquals(NarrationStatus.PLAYING, narration.state.value.status)
+    }
+
+    @Test
+    fun loadingAnotherTopicCancelsAResumeAfterACall() {
+        initEngine()
+        loadAndPlay()
+        val focus = shadowOf(context.getSystemService(AudioManager::class.java)).lastAudioFocusRequest.listener
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        narration.load(NarrationRequest("Book", "Other", listOf("Elsewhere.")))
+        focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        assertEquals(NarrationStatus.PAUSED, narration.state.value.status)
+    }
+
+    @Test
     fun unpluggedHeadphonesPause() {
         initEngine()
         loadAndPlay()

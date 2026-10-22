@@ -48,6 +48,8 @@ class TtsNarrationService(private val context: Context) : NarrationService {
     private val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(AUDIO_ATTRIBUTES)
         .setOnAudioFocusChangeListener(::onFocusChange, main)
+        // Speech is never ducked by the system; pause for navigation prompts instead of talking over them.
+        .setWillPauseWhenDucked(true)
         .build()
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = interrupt(HEADPHONES, resumeLater = false)
@@ -82,10 +84,11 @@ class TtsNarrationService(private val context: Context) : NarrationService {
     private var controller: ListenableFuture<MediaController>? = null
 
     override fun load(request: NarrationRequest) {
-        if (_state.value.status == NarrationStatus.PLAYING) {
-            engine?.stop()
-            releaseFocus()
-        }
+        // A new topic never inherits a queued or after-a-call play from the old one.
+        pendingPlay = false
+        resumeOnFocusGain = false
+        if (_state.value.status == NarrationStatus.PLAYING) engine?.stop()
+        if (replyId == null) releaseFocus()
         _request.value = request
         queue.load(request.sentences.size, request.startSentence)
         publish(NarrationStatus.PAUSED)
@@ -98,6 +101,8 @@ class TtsNarrationService(private val context: Context) : NarrationService {
         val status = _state.value.status
         if (status == NarrationStatus.PLAYING) return
         if (queue.size == 0) return finish()
+        // Bind the media service now, while the user is in the app, even if the engine is still starting.
+        ensurePlaybackService()
         if (engine == null || !_state.value.engineReady) {
             pendingPlay = true
             if (engine == null) engine = createEngine()
@@ -105,7 +110,6 @@ class TtsNarrationService(private val context: Context) : NarrationService {
         }
         if (!holdFocus()) return
         if (status == NarrationStatus.ENDED) queue.moveTo(0)
-        ensurePlaybackService()
         publish(NarrationStatus.PLAYING)
         speakFromCurrent()
     }
@@ -126,6 +130,13 @@ class TtsNarrationService(private val context: Context) : NarrationService {
         queue.load(0, 0)
         _state.update { NarrationState(engineReady = it.engineReady) }
         releaseFocus()
+        releaseController()
+    }
+
+    /** Unbinds from [PlaybackService] so it can stop once nothing plays. */
+    internal fun releaseController() {
+        controller?.let(MediaController::releaseFuture)
+        controller = null
     }
 
     override fun seekToSentence(index: Int) {
@@ -157,8 +168,10 @@ class TtsNarrationService(private val context: Context) : NarrationService {
     override fun speakOnce(text: String) {
         // Without a ready engine the reply stays text-only; the ERROR state already explains a missing voice.
         if (engine == null || !_state.value.engineReady) return
+        resumeOnFocusGain = false
+        cutReply()
         if (_state.value.status == NarrationStatus.PLAYING) stopNarration()
-        if (!holdFocus()) return
+        if (!holdFocus()) return releaseFocus()
         val id = "reply:${++replyCount}"
         replyId = id
         _state.update { it.copy(speakingReply = true) }
@@ -333,7 +346,7 @@ class TtsNarrationService(private val context: Context) : NarrationService {
             AudioManager.AUDIOFOCUS_GAIN -> if (resumeOnFocusGain) play()
             AudioManager.AUDIOFOCUS_LOSS -> interrupt(OTHER_APP, resumeLater = false)
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> interrupt(CALL, resumeLater = true)
-            // AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK: the system lowers our volume itself.
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> interrupt(OTHER_APP, resumeLater = true)
         }
     }
 
@@ -345,7 +358,8 @@ class TtsNarrationService(private val context: Context) : NarrationService {
             stopNarration()
             _events.tryEmit(NarrationEvent.Interrupted(reason))
         }
-        resumeOnFocusGain = wasPlaying && resumeLater
+        // A second transient loss (ringing, then answered) must not cancel the resume the first one set up.
+        resumeOnFocusGain = (wasPlaying || resumeOnFocusGain) && resumeLater
         if (!resumeOnFocusGain) releaseFocus()
     }
 
