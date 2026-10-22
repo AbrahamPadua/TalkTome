@@ -120,12 +120,13 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
     }
     val chatOpened by chat.opened.collectAsStateWithLifecycle()
     val chatSheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var chatShown by remember { mutableStateOf(false) }
-    // Closing from code (citation, "continue reading") animates the sheet away before removing it.
+    // Lags behind chatOpened on close, so a close from code (citation, "continue reading") animates the sheet away.
+    var chatShown by remember { mutableStateOf<ConversationViewModel.Opened?>(null) }
     LaunchedEffect(chatOpened) {
-        if (chatOpened != null) chatShown = true else if (chatShown) {
+        val now = chatOpened
+        if (now != null) chatShown = now else if (chatShown != null) {
             chatSheet.hide()
-            chatShown = false
+            chatShown = null
         }
     }
 
@@ -305,8 +306,7 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
         SourceSheet(indices, settings, load = vm::blocks, onDismiss = { sourceBlocks = null })
     }
     originalPage?.let { OriginalPageDialog(book.filePath, it, onDismiss = { originalPage = null }) }
-    val opened = chatOpened
-    if (chatShown && opened != null) {
+    chatShown?.let { opened ->
         val micAvailable = remember { container.speechInput.isAvailable }
         ConversationSheet(
             vm = chat,

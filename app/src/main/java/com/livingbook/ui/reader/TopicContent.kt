@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -135,6 +136,16 @@ fun TopicContent(
                 flashBlock = null
             }
         }
+    }
+
+    // Reopening a book (or switching rendition) mid-topic starts at the saved sentence, not the top of the topic.
+    var restored by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.sentences) {
+        val first = state.sentences.firstOrNull() ?: return@LaunchedEffect
+        if (restored || first.blockIndex !in topic.startBlock..topic.endBlock) return@LaunchedEffect
+        restored = true
+        val item = state.currentSentence?.let { itemOf(it.blockIndex) } ?: -1
+        if (item > HEADER_ITEMS) listState.scrollToItem(item)
     }
 
     // Listen mode: bring the narrated block on screen; the sentence itself is scrolled into view by NarratedText.
