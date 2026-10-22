@@ -1,5 +1,6 @@
 package com.livingbook.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.NavigateNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,7 +76,7 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(container: AppContainer, settings: AppSettings, onBack: () -> Unit) {
+fun SettingsScreen(container: AppContainer, settings: AppSettings, onBack: () -> Unit, onOpenProfile: () -> Unit) {
     val vm = viewModel { SettingsViewModel(container.settings, container.llm, container.conversationsRepo, container.learning) }
     val check by vm.check.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
@@ -179,6 +181,13 @@ fun SettingsScreen(container: AppContainer, settings: AppSettings, onBack: () ->
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                ListItem(
+                    headlineContent = { Text("Learning profile") },
+                    supportingContent = { Text("See and edit what the app has noted about how you learn.") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Outlined.NavigateNext, contentDescription = null) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.clickable(onClick = onOpenProfile),
                 )
                 DangerButton("Delete all conversations") { confirm = "conversations" }
                 DangerButton("Delete learning profile") { confirm = "profile" }

@@ -15,6 +15,7 @@ import androidx.navigation.toRoute
 import com.livingbook.AppContainer
 import com.livingbook.ui.library.LibraryScreen
 import com.livingbook.ui.reader.ReaderScreen
+import com.livingbook.ui.settings.ProfileScreen
 import com.livingbook.ui.settings.SettingsScreen
 import com.livingbook.ui.theme.LivingBookTheme
 import kotlinx.serialization.Serializable
@@ -24,6 +25,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class ReaderRoute(val bookId: String)
 
 @Serializable data object SettingsRoute
+
+@Serializable data object ProfileRoute
 
 /** App entry composable: theme + navigation. */
 @Composable
@@ -48,7 +51,15 @@ fun LivingBookRoot(container: AppContainer) {
                     )
                 }
                 composable<SettingsRoute> {
-                    SettingsScreen(container, settings, onBack = dropUnlessResumed { nav.popBackStack() })
+                    SettingsScreen(
+                        container,
+                        settings,
+                        onBack = dropUnlessResumed { nav.popBackStack() },
+                        onOpenProfile = dropUnlessResumed { nav.navigate(ProfileRoute) },
+                    )
+                }
+                composable<ProfileRoute> {
+                    ProfileScreen(container.learning, onBack = dropUnlessResumed { nav.popBackStack() })
                 }
             }
         }
