@@ -146,8 +146,9 @@ highlights and notes, listen mode with background playback, read/listen switchin
 with typed questions, demo mode, grounded answers through the proxy, guided renditions, tutoring suggestions,
 the learning profile, settings and privacy controls.
 
-None of this has run on a real phone yet. Everything above runs in JVM tests, including one full UI walk-through on
-Robolectric, but nobody has listened to narration, used the lock screen or spoken a question on a device.
+Checked on a Galaxy Z Flip7 (Android 17): import, reading, narration, playback continuing with the screen locked
+(including autoplay into the next topic), the lock-screen media bar, media and headset keys, a spoken question
+answered in demo mode, and narration resuming at the interrupted sentence after a conversation.
 
 Known limits:
 
