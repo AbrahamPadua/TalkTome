@@ -6,12 +6,15 @@ import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import com.livingbook.model.BlockKind
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.cos.COSDictionary
+import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
 import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
+import com.tom_roush.pdfbox.pdmodel.font.PDFontDescriptor
 import com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline
 import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem
@@ -90,5 +93,55 @@ class PdfDocumentParserTest {
         assertTrue(encrypted.userMessage.contains("password"))
         val scanned = assertThrows(DocumentException::class.java) { runBlocking { parser.parse(pdf(imageOnly = true)) } }
         assertTrue(scanned.userMessage.contains("OCR"))
+    }
+
+    @Test fun recognizesBoldFontNamesAndDescriptorsOnlyWhenEveryNonSpaceGlyphIsBold() = runBlocking {
+        fun font(name: String, forceBold: Boolean = false, weight: Float = 0f): PDType1Font {
+            val descriptor = PDFontDescriptor(COSDictionary()).apply {
+                fontName = name
+                isForceBold = forceBold
+                fontWeight = weight
+            }
+            return PDType1Font(COSDictionary(PDType1Font.HELVETICA.cosObject).apply {
+                setName(COSName.BASE_FONT, name)
+                setItem(COSName.FONT_DESC, descriptor)
+            })
+        }
+        val file = temporary.newFile("bold-fonts.pdf")
+        val headings = listOf("Named bold", "Named black", "Named heavy", "Named semibold", "Forced bold", "Weighted bold")
+        PDDocument().use { document ->
+            val page = PDPage()
+            document.addPage(page)
+            PDPageContentStream(document, page).use { stream ->
+                stream.beginText()
+                stream.newLineAtOffset(50f, 720f)
+                val fonts = listOf(PDType1Font.HELVETICA_BOLD, font("FixtureBlack"), font("FixtureHeavy"),
+                    font("FixtureSemibold"), font("FixtureForced", forceBold = true), font("FixtureWeighted", weight = 600f))
+                for ((heading, headingFont) in headings.zip(fonts)) {
+                    stream.setFont(headingFont, 13.1f)
+                    stream.showText(heading)
+                    stream.newLineAtOffset(0f, -25f)
+                }
+                stream.setFont(PDType1Font.HELVETICA_BOLD, 12f)
+                stream.showText("Bold")
+                stream.setFont(PDType1Font.HELVETICA, 12f)
+                stream.showText(" ")
+                stream.setFont(PDType1Font.HELVETICA_BOLD, 12f)
+                stream.showText("words")
+                stream.newLineAtOffset(0f, -25f)
+                stream.showText("Mixed ")
+                stream.setFont(PDType1Font.HELVETICA, 12f)
+                stream.showText("ordinary words")
+                repeat(4) {
+                    stream.newLineAtOffset(0f, -16f)
+                    stream.showText("This is ordinary body text with enough words to establish the normal font size.")
+                }
+                stream.endText()
+            }
+            document.save(file)
+        }
+        val book = PdfDocumentParser(context).parse(file)
+        assertEquals(headings + "Bold words", book.blocks.filter { it.kind == BlockKind.HEADING }.map { it.text })
+        assertTrue(book.blocks.any { it.kind == BlockKind.PARAGRAPH && it.text.startsWith("Mixed ordinary words") })
     }
 }

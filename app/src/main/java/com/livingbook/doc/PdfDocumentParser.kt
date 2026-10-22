@@ -74,6 +74,7 @@ class PdfDocumentParser(private val context: Context) : DocumentParser {
         val lines = mutableListOf<PdfLine>()
         private val text = StringBuilder()
         private val positions = mutableListOf<TextPosition>()
+        private val boldFontName = Regex("Bold|Black|Heavy|Semibold", RegexOption.IGNORE_CASE)
 
         // Content-stream order keeps two-column papers readable; sorting by position would interleave the columns.
         init { sortByPosition = false }
@@ -89,8 +90,14 @@ class PdfDocumentParser(private val context: Context) : DocumentParser {
 
         private fun flush() {
             if (text.isNotBlank() && positions.isNotEmpty()) {
+                val glyphs = positions.filter { it.unicode.isNotBlank() }
+                val bold = glyphs.isNotEmpty() && glyphs.all {
+                    val descriptor = it.font.fontDescriptor
+                    boldFontName.containsMatchIn(it.font.name.orEmpty()) || descriptor?.isForceBold == true ||
+                        (descriptor?.fontWeight ?: 0f) >= 600f
+                }
                 lines += PdfLine(text.toString(), currentPageNo, median(positions.map { it.fontSizeInPt }),
-                    positions.minOf { it.xDirAdj }, median(positions.map { it.yDirAdj }))
+                    positions.minOf { it.xDirAdj }, median(positions.map { it.yDirAdj }), bold)
             }
             text.setLength(0)
             positions.clear()
