@@ -33,7 +33,7 @@ class AiGuidedContentGenerator(
                 val result = provider.complete(
                     LlmRequest(PromptBuilder.GUIDED_SYSTEM, listOf(LlmMessage("user", PromptBuilder.guidedTurn(context, blocks))), maxTokens = MAX_TOKENS)
                 )
-                val segments = ResponseParser.parseGuided(result.text, blocks, topic.startBlock..topic.endBlock)
+                val segments = ResponseParser.parseGuided(result.text, blocks)
                 if (segments.isEmpty()) throw AiException("The AI service couldn't produce a guided version of this topic. Try again, or keep reading the original.")
                 GuidedContent(segments, isMock = false, model = result.model)
                     .also { reading.saveGuided(context.bookId, topic.startBlock, topic.endBlock, it) }

@@ -73,15 +73,28 @@ class ResponseParserTest {
         assertTrue(ResponseParser.parseAnswer("  ", sent).segments.isEmpty())
     }
 
-    @Test fun guidedQuotedMustBeVerbatimAndBlocksInRange() {
-        val source = listOf(
-            BlockEntity(bookId = "b", idx = 10, kind = BlockKind.PARAGRAPH, text = "A prior is what you believe\nbefore seeing data.", headingLevel = 0, page = 3, location = null),
-        )
+    @Test fun decodedJsonWithoutUsableSegmentsIsNotShownRaw() {
+        listOf("""{"segments":[]}""", """{"segments":[{"kind":"book","text":"  "}]}""", """{"answer":"Priors."}""").forEach {
+            assertTrue(it, ResponseParser.parseAnswer(it, sent).segments.isEmpty())
+        }
+    }
+
+    @Test fun onlyPlainBlockIdsAreCitations() {
+        val raw = """{"segments":[{"kind":"book","text":"x","citations":[" b12 ",14,"-1","page 2, block 9","B12-B15","14.5"]}]}"""
+        assertEquals(listOf(12, 14), ResponseParser.parseAnswer(raw, setOf(1, 2, 9, 12, 14, 15)).segments.single().citations)
+    }
+
+    private val guidedSource = listOf(
+        BlockEntity(bookId = "b", idx = 10, kind = BlockKind.PARAGRAPH, text = "A prior is what you believe\nbefore seeing data.", headingLevel = 0, page = 3, location = null),
+        BlockEntity(bookId = "b", idx = 11, kind = BlockKind.PARAGRAPH, text = "Evidence updates the prior.", headingLevel = 0, page = 3, location = null),
+    )
+
+    @Test fun guidedQuotedMustBeVerbatimAndBlocksSent() {
         val raw = """{"segments":[
             {"kind":"quoted","text":"“A prior is what you believe before seeing data.”","sourceBlocks":[10,42]},
             {"kind":"quoted","text":"A prior is a guess.","sourceBlocks":[10]},
             {"kind":"added","text":"Think of a weather forecast.","sourceBlocks":[]},
-            {"kind":"restated","text":"You start with a belief.","sourceBlocks":["B10"]}]}"""
+            {"kind":"restated","text":"You start with a belief.","sourceBlocks":["B10", 12]}]}"""
 
         assertEquals(
             listOf(
@@ -90,11 +103,25 @@ class ResponseParserTest {
                 GuidedSegment(GuidedKind.ADDED, "Think of a weather forecast."),
                 GuidedSegment(GuidedKind.RESTATED, "You start with a belief.", listOf(10)),
             ),
-            ResponseParser.parseGuided(raw, source, 10..12),
+            ResponseParser.parseGuided(raw, guidedSource),
+        )
+    }
+
+    @Test fun guidedQuoteMustBeInItsOwnCitedBlock() {
+        val raw = """{"segments":[
+            {"kind":"quoted","text":"Evidence updates the prior.","sourceBlocks":[10]},
+            {"kind":"quoted","text":"Evidence updates the prior.","sourceBlocks":[]}]}"""
+
+        assertEquals(
+            listOf(
+                GuidedSegment(GuidedKind.RESTATED, "Evidence updates the prior.", listOf(10)),
+                GuidedSegment(GuidedKind.QUOTED, "Evidence updates the prior.", listOf(11)),
+            ),
+            ResponseParser.parseGuided(raw, guidedSource),
         )
     }
 
     @Test fun guidedGarbageIsEmpty() {
-        assertTrue(ResponseParser.parseGuided("not json", emptyList(), 0..1).isEmpty())
+        assertTrue(ResponseParser.parseGuided("not json", emptyList()).isEmpty())
     }
 }

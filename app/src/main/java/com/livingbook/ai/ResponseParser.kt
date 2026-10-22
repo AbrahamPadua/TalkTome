@@ -21,11 +21,13 @@ object ResponseParser {
 
     /**
      * Keeps only citations in [sentBlocks]; a BOOK segment left without one becomes INTERPRETATION.
-     * Unusable JSON falls back to one INTERPRETATION segment with the reply's text.
+     * JSON that doesn't decode falls back to one INTERPRETATION segment with the reply's text. JSON that decodes
+     * but holds no usable segment gives no segments, so raw JSON is never shown as an answer.
      */
     fun parseAnswer(raw: String, sentBlocks: Set<Int>): ParsedAnswer {
         val wire = decode(raw, WireReply.serializer())
-        val segments = wire?.segments.orEmpty().mapNotNull { seg ->
+            ?: return ParsedAnswer(fallbackText(raw)?.let { listOf(AnswerSegment(SegmentKind.INTERPRETATION, it)) }.orEmpty(), null)
+        val segments = wire.segments.mapNotNull { seg ->
             val text = seg.text.trim().ifEmpty { return@mapNotNull null }
             val kind = when (seg.kind.trim().lowercase()) {
                 "book" -> SegmentKind.BOOK
@@ -36,28 +38,32 @@ object ResponseParser {
             else seg.citations.mapNotNull(::blockNumber).filter { it in sentBlocks }.distinct()
             AnswerSegment(if (kind == SegmentKind.BOOK && citations.isEmpty()) SegmentKind.INTERPRETATION else kind, text, citations)
         }
-        if (segments.isEmpty()) {
-            return ParsedAnswer(fallbackText(raw)?.let { listOf(AnswerSegment(SegmentKind.INTERPRETATION, it)) }.orEmpty(), null)
-        }
-        val assessment = wire?.assessment?.takeIf { it.concept.isNotBlank() }?.let { Assessment(it.understood, it.concept.trim()) }
+        val assessment = wire.assessment?.takeIf { it.concept.isNotBlank() }?.let { Assessment(it.understood, it.concept.trim()) }
         return ParsedAnswer(segments, assessment)
     }
 
     /**
-     * Keeps [GuidedSegment.sourceBlocks] inside [range]; a QUOTED segment not found verbatim in [source]
-     * (ignoring whitespace differences) becomes RESTATED. Returns empty when the JSON is unusable.
+     * Keeps only [GuidedSegment.sourceBlocks] that were sent in [source]. A QUOTED segment must appear verbatim
+     * (ignoring whitespace differences) in one of its cited blocks or, when it cites none, in some sent block,
+     * which it then cites. Otherwise it becomes RESTATED. Returns empty when the JSON is unusable.
      */
-    fun parseGuided(raw: String, source: List<BlockEntity>, range: IntRange): List<GuidedSegment> {
+    fun parseGuided(raw: String, source: List<BlockEntity>): List<GuidedSegment> {
         val wire = decode(raw, WireReply.serializer()) ?: return emptyList()
-        val sourceTexts = source.map { squash(it.text) }
+        val sent = source.associate { it.idx to squash(it.text) }
         return wire.segments.mapNotNull { seg ->
             val text = seg.text.trim().ifEmpty { return@mapNotNull null }
-            val blocks = seg.sourceBlocks.mapNotNull(::blockNumber).filter { it in range }.distinct()
+            val blocks = seg.sourceBlocks.mapNotNull(::blockNumber).filter { it in sent }.distinct()
             when (seg.kind.trim().lowercase()) {
                 "added" -> GuidedSegment(GuidedKind.ADDED, text, blocks)
                 "quoted" -> {
                     val quote = text.trim('"', '“', '”').trim()
-                    if (quote.isNotEmpty() && sourceTexts.any { squash(quote) in it }) GuidedSegment(GuidedKind.QUOTED, quote, blocks)
+                    val q = squash(quote)
+                    val verbatimIn = when {
+                        q.isEmpty() -> null
+                        blocks.isNotEmpty() -> blocks.takeIf { cited -> cited.any { q in sent.getValue(it) } }
+                        else -> sent.entries.firstOrNull { q in it.value }?.let { listOf(it.key) }
+                    }
+                    if (verbatimIn != null) GuidedSegment(GuidedKind.QUOTED, quote, verbatimIn)
                     else GuidedSegment(GuidedKind.RESTATED, text, blocks)
                 }
                 else -> GuidedSegment(GuidedKind.RESTATED, text, blocks)
@@ -82,8 +88,8 @@ object ResponseParser {
         return salvaged.ifBlank { raw.replace(FENCE, "").trim() }.ifBlank { null }
     }
 
-    /** Accepts 12, "12" and "B12". */
-    private fun blockNumber(value: JsonPrimitive): Int? = DIGITS.find(value.content)?.value?.toIntOrNull()
+    /** Accepts 12, "12" and "B12"; rejects "-1", "page 2, block 9" and ranges like "B12-B15". */
+    private fun blockNumber(value: JsonPrimitive): Int? = BLOCK_ID.matchEntire(value.content.trim())?.groupValues?.get(1)?.toIntOrNull()
 
     private fun squash(text: String) = text.replace(WHITESPACE, " ").trim()
 
@@ -108,6 +114,6 @@ object ResponseParser {
     }
     private val TEXT_FIELD = Regex("\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
     private val FENCE = Regex("```[a-zA-Z]*")
-    private val DIGITS = Regex("\\d+")
+    private val BLOCK_ID = Regex("B?(\\d+)", RegexOption.IGNORE_CASE)
     private val WHITESPACE = Regex("\\s+")
 }
