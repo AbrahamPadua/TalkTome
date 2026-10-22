@@ -6,3 +6,8 @@ plugins {
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.ksp) apply false
 }
+
+// Optional: build outside a synced folder (OneDrive locks build files). Set LIVINGBOOK_BUILD_ROOT=C:/some/local/dir.
+System.getenv("LIVINGBOOK_BUILD_ROOT")?.let { root ->
+    allprojects { layout.buildDirectory.set(file("$root/${rootProject.name}/${project.name}")) }
+}
