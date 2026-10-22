@@ -1,0 +1,16 @@
+.gradle/
+build/
+/local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+!/dist/*.apk
+__pycache__/
+.venv/
+backend/.env
+.pytest_cache/
+.claude/worktrees/
