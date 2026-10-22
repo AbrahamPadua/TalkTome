@@ -39,10 +39,25 @@ def client_for(provider) -> TestClient:
 
 # ---- App: auth, limits, success ------------------------------------------------------------------------------------
 
-def test_refuses_to_start_without_token(monkeypatch):
-    monkeypatch.delenv("PROXY_TOKEN", raising=False)
+@pytest.mark.parametrize("value", [None, "", "   \n"])
+def test_refuses_to_start_without_token(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("PROXY_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("PROXY_TOKEN", value)
     with pytest.raises(RuntimeError, match="PROXY_TOKEN"):
         main.create_app(provider=FakeProvider())
+
+
+def test_token_from_env_is_stripped(monkeypatch):
+    monkeypatch.setenv("PROXY_TOKEN", f"  {TOKEN}\n")
+    client = TestClient(main.create_app(provider=FakeProvider()))
+    assert client.post("/v1/complete", json=BODY, headers=AUTH).status_code == 200
+
+
+def test_non_numeric_content_length_is_400():
+    r = client_for(FakeProvider()).post("/v1/complete", content=b"{}", headers={**AUTH, "Content-Length": "abc"})
+    assert r.status_code == 400
 
 
 def test_health():
@@ -257,3 +272,14 @@ def test_openai_compatible_unreachable(monkeypatch):
     with pytest.raises(ProviderError) as e:
         asyncio.run(openai_provider(monkeypatch, handler).complete("", [{"role": "user", "content": "Hi"}], 100))
     assert e.value.status == 502
+
+
+# ---- Timeouts ------------------------------------------------------------------------------------------------------
+
+def test_provider_timeout_is_configurable(monkeypatch):
+    monkeypatch.setenv("OPENAI_MODEL", "llama3.1")
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+    assert AnthropicProvider().client.timeout == 80.0
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "300")
+    assert AnthropicProvider().client.timeout == 300.0
+    assert OpenAICompatibleProvider().http.timeout == httpx.Timeout(300.0)
