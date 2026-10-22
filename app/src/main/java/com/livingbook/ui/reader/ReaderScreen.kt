@@ -1,8 +1,13 @@
 package com.livingbook.ui.reader
 
+import android.Manifest
 import android.content.ClipData
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -60,9 +65,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.livingbook.AppContainer
@@ -91,6 +98,11 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
     var passage by remember { mutableStateOf<PassageTarget?>(null) }
     var sourceBlocks by remember { mutableStateOf<List<Int>?>(null) }
     var visibleBlock by remember { mutableStateOf<Int?>(null) }
+    var voicePickerOpen by rememberSaveable { mutableStateOf(false) }
+    val narration by container.narration.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // Narration works without it; the permission only adds the lock-screen and notification controls.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     LaunchedEffect(bookId) {
         session.open(bookId)
@@ -113,6 +125,15 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
     }
     fun say(text: String) {
         scope.launch { snackbar.showSnackbar(text) }
+    }
+    fun setMode(mode: ReadMode) {
+        if (mode == ReadMode.LISTEN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !askedForNotifications &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            askedForNotifications = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        session.setMode(mode)
     }
     val highlighted = remember(annotations) {
         annotations.filter { it.kind == AnnotationKind.HIGHLIGHT }.mapTo(HashSet()) { it.blockIndex }
@@ -152,7 +173,27 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                 },
             )
         },
-        bottomBar = { ReaderBottomBar(state, onPrevious = session::previousTopic, onNext = session::nextTopic, onReturn = session::returnToSaved) },
+        bottomBar = {
+            ReaderBottomBar(
+                state = state,
+                onPrevious = session::previousTopic,
+                onNext = session::nextTopic,
+                onReturn = session::returnToSaved,
+                onMode = ::setMode,
+                player = {
+                    ListenPanel(
+                        state = state,
+                        narration = narration,
+                        rate = settings.ttsRate,
+                        onTogglePlay = session::togglePlay,
+                        onSkipBack = session::skipBack,
+                        onSkipForward = session::skipForward,
+                        onRate = session::setRate,
+                        onVoice = { voicePickerOpen = true },
+                    )
+                },
+            )
+        },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         AnimatedContent(
@@ -204,10 +245,29 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
         SourceSheet(indices, settings, load = vm::blocks, onDismiss = { sourceBlocks = null })
     }
     originalPage?.let { OriginalPageDialog(book.filePath, it, onDismiss = { originalPage = null }) }
+    if (voicePickerOpen) {
+        val voices by container.narration.voices.collectAsStateWithLifecycle()
+        VoicePickerDialog(
+            voices = voices,
+            selected = settings.ttsVoice,
+            onSelect = { session.setVoice(it); voicePickerOpen = false },
+            onDismiss = { voicePickerOpen = false },
+        )
+    }
 }
 
+// shortcut: asked once per process, not persisted; store a flag in settings if the repeat prompt bothers people.
+private var askedForNotifications = false
+
 @Composable
-private fun ReaderBottomBar(state: SessionState, onPrevious: () -> Unit, onNext: () -> Unit, onReturn: () -> Unit) {
+private fun ReaderBottomBar(
+    state: SessionState,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onReturn: () -> Unit,
+    onMode: (ReadMode) -> Unit,
+    player: @Composable () -> Unit,
+) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 4.dp)) {
             if (state.returnTo != null) {
@@ -218,10 +278,12 @@ private fun ReaderBottomBar(state: SessionState, onPrevious: () -> Unit, onNext:
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            AnimatedVisibility(state.mode == ReadMode.LISTEN) { player() }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                 IconButton(onClick = onPrevious, enabled = state.hasPrevious) {
                     Icon(Icons.AutoMirrored.Outlined.NavigateBefore, contentDescription = "Previous topic")
                 }
+                ModeToggle(state.mode, onMode, Modifier.weight(1f))
                 IconButton(onClick = onNext, enabled = state.hasNext) {
                     Icon(Icons.AutoMirrored.Outlined.NavigateNext, contentDescription = "Next topic")
                 }

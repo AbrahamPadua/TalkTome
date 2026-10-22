@@ -82,6 +82,11 @@ class ReaderLogicTest {
     }
 
     @Test
+    fun rateLabelsDropTrailingZero() {
+        assertEquals(listOf("0.8×", "1×", "1.25×", "1.5×", "2×"), SPEEDS.map(::rateLabel))
+    }
+
+    @Test
     fun snippetTruncatesWithEllipsis() {
         assertEquals("short", snippet("short"))
         assertEquals("abc…", snippet("abc def", max = 4))
