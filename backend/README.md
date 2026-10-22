@@ -48,7 +48,7 @@ The server won't start without `PROXY_TOKEN`. One way to generate a token: `pyth
 3. Check from the phone's browser that `http://<that-ip>:8787/health` answers.
 4. In the app, open Settings, set AI to the proxy mode, enter `http://<that-ip>:8787` as the proxy URL and your `PROXY_TOKEN` as the token, and accept the AI consent.
 
-Plain HTTP is fine on your own network. Anywhere else, put the proxy behind HTTPS.
+Plain HTTP is fine on your own network. Anywhere else, put the proxy behind HTTPS. The app only accepts an `http://` proxy URL for loopback, private network addresses (10.x, 172.16 to 172.31, 192.168.x), `.local` names and the Android emulator's `10.0.2.2`.
 
 ## Environment variables
 
@@ -59,6 +59,7 @@ Plain HTTP is fine on your own network. Anywhere else, put the proxy behind HTTP
 | `ANTHROPIC_API_KEY` | none | Read by the Anthropic SDK |
 | `ANTHROPIC_MODEL` | `claude-opus-5-5` | |
 | `LLM_EFFORT` | `low` | `low`, `medium`, `high`, `xhigh` or `max`. Higher is slower and costs more |
+| `LLM_TIMEOUT_SECONDS` | `80` | How long to wait for the provider before returning 504. Slow local models need more, for example `300` for Ollama on a CPU. The app gives up after 120 s, so above that it shows its own timeout message |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | For Ollama: `http://localhost:11434/v1` |
 | `OPENAI_API_KEY` | none | Not needed for Ollama |
 | `OPENAI_MODEL` | none | Required with `openai_compatible`, for example `llama3.1` |

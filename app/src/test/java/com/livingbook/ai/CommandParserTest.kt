@@ -13,7 +13,7 @@ class CommandParserTest {
         "Go back" to ReaderCommand.GoBack,
         "previous topic" to ReaderCommand.GoBack,
         "Repeat that." to ReaderCommand.RepeatThat,
-        "Can you say that again?" to ReaderCommand.RepeatThat,
+        "Can you say that again" to ReaderCommand.RepeatThat,
         "skip this topic" to ReaderCommand.SkipTopic,
         "Next topic!" to ReaderCommand.SkipTopic,
         "skip" to ReaderCommand.SkipTopic,
@@ -25,6 +25,15 @@ class CommandParserTest {
         "Wait, what were we discussing?" to ReaderCommand.Tutor(TutorAction.RECAP_DISCUSSION),
         "Summarize this topic" to ReaderCommand.Tutor(TutorAction.SUMMARIZE),
         "Okay so quiz me" to ReaderCommand.Tutor(TutorAction.QUIZ),
+        // A question mark keeps tutor requests but never triggers navigation, saving or repeating.
+        "Quiz me?" to ReaderCommand.Tutor(TutorAction.QUIZ),
+        "Go back?" to null,
+        "Skip this?" to null,
+        "Next topic?" to null,
+        "Remember this?" to null,
+        "Resume? " to null,
+        "Can you say that again?" to null,
+        "Go on?" to null,
         // Real questions with extra content go to the model.
         "can you give me an example of priors in vision?" to null,
         "Why does the author go back to Kant here?" to null,
@@ -41,6 +50,7 @@ class CommandParserTest {
             assertEquals(it, ReaderCommand.Tutor(TutorAction.CONTINUE_EXPLAINING), CommandParser.parse(it, hasActiveExplanation = true))
             assertEquals(it, ReaderCommand.ContinueReading, CommandParser.parse(it, hasActiveExplanation = false))
         }
+        assertEquals(ReaderCommand.Tutor(TutorAction.CONTINUE_EXPLAINING), CommandParser.parse("Go on?", hasActiveExplanation = true))
     }
 
     @Test fun continueReadingIsNeverContinueExplaining() {

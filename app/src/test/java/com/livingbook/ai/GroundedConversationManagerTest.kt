@@ -2,6 +2,7 @@ package com.livingbook.ai
 
 import com.livingbook.data.AiMode
 import com.livingbook.data.db.AnnotationKind
+import com.livingbook.data.db.MessageEntity
 import com.livingbook.data.db.SignalKind
 import com.livingbook.model.AnswerSegment
 import com.livingbook.model.ChatRole
@@ -154,17 +155,69 @@ class GroundedConversationManagerTest {
         assertEquals("Bayesian updating", signal.label)
     }
 
-    @Test fun rememberSavesTheLastAnswerAsANote() = runBlocking {
+    @Test fun rememberSavesTheLastRealAnswerAsANote() = runBlocking {
         book.configure(AiMode.DEMO)
-        assertEquals("Saved to your notes.", manager.remember(conversation, book.context()))
         manager.send(conversation, book.context(), "posterior")
+        assertEquals("Saved to your notes.", manager.remember(conversation, book.context()))
+        book.configure(AiMode.PROXY)
+        provider.reply = """{"segments":[{"kind":"interpretation","text":"The posterior is the updated belief."}]}"""
+        manager.send(conversation, book.context(), "And the posterior?")
 
         manager.remember(conversation, book.context())
 
         val notes = book.reading.observeAnnotations(TestBook.BOOK).first()
         assertEquals(2, notes.size)
         assertTrue(notes.all { it.kind == AnnotationKind.NOTE && it.blockIndex == book.priors.startBlock })
-        assertTrue("falls back to the current sentence", notes.any { it.text == "Evidence updates the prior into a posterior." })
-        assertTrue("saves the last answer", notes.any { it.text.startsWith("Demo mode, not AI") })
+        assertTrue("a demo reply is skipped for the current sentence", notes.any { it.text == "Evidence updates the prior into a posterior." })
+        assertTrue("saves the last real answer", notes.any { it.text == "The posterior is the updated belief." })
+        assertFalse(notes.any { it.text.startsWith("Demo mode") })
+    }
+
+    @Test fun demoRepliesNeverGoBackToTheModel() = runBlocking {
+        book.configure(AiMode.DEMO)
+        manager.send(conversation, book.context(), "First question")
+        book.configure(AiMode.PROXY)
+        provider.reply = """{"segments":[{"kind":"interpretation","text":"Answer."}]}"""
+
+        manager.send(conversation, book.context(), "Second question")
+
+        val messages = provider.requests.single().messages
+        assertEquals(listOf("user", "user"), messages.map { it.role })
+        assertEquals("First question", messages.first().content)
+        assertFalse(messages.any { "Demo mode" in it.content })
+    }
+
+    @Test fun onlyARealQuestionTurnLeadsToAssessment() = runBlocking {
+        book.configure(AiMode.DEMO)
+        manager.send(conversation, book.context(), "Challenge", TutorAction.CHALLENGE)
+        book.configure(AiMode.PROXY)
+        provider.error = AiException(ProxyLlmProvider.UNREACHABLE)
+        manager.send(conversation, book.context(), "Challenge", TutorAction.CHALLENGE)
+        provider.error = null
+        provider.reply = """{"segments":[{"kind":"interpretation","text":"Sure."}]}"""
+
+        manager.send(conversation, book.context(), "It stays the same.")
+
+        assertFalse("Assessment:" in provider.requests.last().messages.last().content)
+    }
+
+    @Test fun decodedButEmptyReplyGivesANote() = runBlocking {
+        book.configure(AiMode.PROXY)
+        provider.reply = """{"segments":[]}"""
+        val reply = manager.send(conversation, book.context(), "What is a prior?")
+        assertEquals(ChatRole.NOTE, reply.role)
+        assertEquals("The AI service didn't send a usable answer. Please try asking again.", reply.text)
+    }
+
+    @Test fun unreadableStoredRowsDoNotBreakSend() = runBlocking {
+        book.db.conversations().insertMessage(MessageEntity(conversationId = conversation, role = ChatRole.ASSISTANT, text = "old", segmentsJson = "{not json", isMock = false, createdAt = 0))
+        book.configure(AiMode.PROXY)
+        provider.reply = """{"segments":[{"kind":"interpretation","text":"Still answers."}]}"""
+
+        val reply = manager.send(conversation, book.context(), "What is a prior?")
+
+        assertEquals(ChatRole.ASSISTANT, reply.role)
+        assertEquals("Still answers.", reply.text)
+        assertEquals("Saved to your notes.", manager.remember(conversation, book.context()))
     }
 }

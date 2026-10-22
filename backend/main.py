@@ -38,7 +38,7 @@ def error(status: int, message: str) -> JSONResponse:
 
 
 def create_app(provider=None, token: str | None = None) -> FastAPI:
-    token = token if token is not None else os.environ.get("PROXY_TOKEN", "")
+    token = (token if token is not None else os.environ.get("PROXY_TOKEN", "")).strip()
     if not token:
         raise RuntimeError("PROXY_TOKEN is not set. Set it to a long random secret; the proxy will not run without auth.")
     provider = provider or make_provider()
@@ -67,7 +67,11 @@ def create_app(provider=None, token: str | None = None) -> FastAPI:
         if scheme.lower() != "bearer" or not hmac.compare_digest(given.strip().encode(), token.encode()):
             return error(401, "Invalid or missing proxy token."), None
 
-        body = await read_limited(request)
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            return error(400, "Invalid Content-Length header."), None
+        body = None if declared > MAX_BODY_BYTES else await read_limited(request)
         if body is None:
             return error(413, f"Request body is over {MAX_BODY_BYTES // 1024} KB."), None
         try:
@@ -95,8 +99,6 @@ def create_app(provider=None, token: str | None = None) -> FastAPI:
 
 async def read_limited(request: Request) -> bytes | None:
     """The body, or None once it passes MAX_BODY_BYTES. Streams so an oversized body is never held in memory."""
-    if int(request.headers.get("content-length") or 0) > MAX_BODY_BYTES:
-        return None
     chunks, size = [], 0
     async for chunk in request.stream():
         size += len(chunk)

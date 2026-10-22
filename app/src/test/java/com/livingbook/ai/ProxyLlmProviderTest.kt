@@ -13,6 +13,8 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -31,8 +33,10 @@ class ProxyLlmProviderTest {
 
     @Before fun setUp() = runBlocking {
         server.start()
-        configure(url = server.url("/").toString(), consent = true)
+        configure(url = localUrl(), consent = true)
     }
+
+    private fun localUrl() = "http://127.0.0.1:${server.port}"
 
     @After fun tearDown() = server.shutdown()
 
@@ -103,8 +107,31 @@ class ProxyLlmProviderTest {
     }
 
     @Test fun noConsentSendsNothing() {
-        runBlocking { configure(url = server.url("/").toString(), consent = false) }
+        runBlocking { configure(url = localUrl(), consent = false) }
         assertEquals(ProxyLlmProvider.NO_CONSENT, failureMessage())
         assertEquals(0, server.requestCount)
+    }
+
+    @Test fun plainHttpToAPublicHostIsRefused() {
+        runBlocking { configure(url = "http://proxy.example.com:8787", consent = true) }
+        assertEquals(ProxyLlmProvider.NOT_HTTPS, failureMessage())
+    }
+
+    @Test fun localHosts() {
+        listOf("localhost", "127.0.0.1", "::1", "10.0.2.2", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.20", "mypc.local")
+            .forEach { assertTrue(it, ProxyLlmProvider.isLocalHost(it)) }
+        listOf("example.com", "8.8.8.8", "172.32.0.1", "172.15.0.1", "192.169.0.1", "11.0.0.1", "local", "10.0.0")
+            .forEach { assertFalse(it, ProxyLlmProvider.isLocalHost(it)) }
+    }
+
+    @Test fun unsendableTokenIsActionable() {
+        runBlocking { settings.update { it.copy(proxyToken = "tökén") } }
+        assertEquals("The proxy URL or token in Settings contains characters that can't be sent. Check both and try again.", failureMessage())
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun oversizedReplyIsMalformed() {
+        server.enqueue(MockResponse().setBody("{\"text\":\"" + "x".repeat(ProxyLlmProvider.MAX_RESPONSE_BYTES.toInt()) + "\",\"model\":\"m\"}"))
+        assertEquals("The AI service sent a reply the app couldn't read. Check that your proxy is up to date.", failureMessage())
     }
 }
