@@ -12,12 +12,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -58,13 +56,6 @@ fun ModeToggle(mode: ReadMode, onMode: (ReadMode) -> Unit, modifier: Modifier = 
                 selected = mode == value,
                 onClick = { onMode(value) },
                 shape = SegmentedButtonDefaults.itemShape(i, 2),
-                icon = {
-                    Icon(
-                        if (value == ReadMode.READ) Icons.AutoMirrored.Outlined.MenuBook else Icons.Outlined.Headphones,
-                        contentDescription = null,
-                        modifier = Modifier.size(SegmentedButtonDefaults.IconSize),
-                    )
-                },
             ) { Text(label, maxLines = 1) }
         }
     }

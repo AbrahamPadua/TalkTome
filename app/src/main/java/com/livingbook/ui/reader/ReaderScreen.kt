@@ -17,10 +17,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -34,7 +37,10 @@ import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -47,9 +53,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,12 +81,15 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.livingbook.AppContainer
+import com.livingbook.ai.TutorSuggestion
 import com.livingbook.data.AppSettings
 import com.livingbook.data.db.AnnotationKind
 import com.livingbook.data.db.BlockEntity
 import com.livingbook.model.BlockKind
 import com.livingbook.model.ReadMode
 import com.livingbook.session.SessionState
+import com.livingbook.ui.conversation.ConversationSheet
+import com.livingbook.ui.conversation.ConversationViewModel
 import com.livingbook.ui.theme.readingStyle
 import kotlinx.coroutines.launch
 
@@ -103,6 +114,19 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
     val context = LocalContext.current
     // Narration works without it; the permission only adds the lock-screen and notification controls.
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    val chat = viewModel {
+        ConversationViewModel(container.session, container.conversations, container.reading, container.settings, container.narration, container.speechInput)
+    }
+    val chatOpened by chat.opened.collectAsStateWithLifecycle()
+    val chatSheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var chatShown by remember { mutableStateOf(false) }
+    // Closing from code (citation, "continue reading") animates the sheet away before removing it.
+    LaunchedEffect(chatOpened) {
+        if (chatOpened != null) chatShown = true else if (chatShown) {
+            chatSheet.hide()
+            chatShown = false
+        }
+    }
 
     LaunchedEffect(bookId) {
         session.open(bookId)
@@ -135,6 +159,9 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
         }
         session.setMode(mode)
     }
+    fun ask(opening: ConversationViewModel.Opening = ConversationViewModel.Opening()) = chat.open(opening)
+    fun pickSuggestion(suggestion: TutorSuggestion) =
+        ask(ConversationViewModel.Opening(action = suggestion.action, label = suggestion.label, topicIndex = state.suggestionsTopicIndex))
     val highlighted = remember(annotations) {
         annotations.filter { it.kind == AnnotationKind.HIGHLIGHT }.mapTo(HashSet()) { it.blockIndex }
     }
@@ -180,6 +207,7 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                 onNext = session::nextTopic,
                 onReturn = session::returnToSaved,
                 onMode = ::setMode,
+                onAsk = { ask() },
                 player = {
                     ListenPanel(
                         state = state,
@@ -190,6 +218,23 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                         onSkipForward = session::skipForward,
                         onRate = session::setRate,
                         onVoice = { voicePickerOpen = true },
+                        extra = {
+                            if (state.suggestions.isNotEmpty()) {
+                                // Offered while narration keeps playing; nothing pauses until a chip is tapped.
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                ) {
+                                    SuggestionsRow(
+                                        state.suggestions,
+                                        onPick = ::pickSuggestion,
+                                        onDismiss = session::dismissSuggestions,
+                                        modifier = Modifier.padding(start = 16.dp, end = 4.dp, bottom = 12.dp),
+                                    )
+                                }
+                            }
+                        },
                     )
                 },
             )
@@ -213,6 +258,18 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                 onShowSource = { sourceBlocks = it },
                 onConsumeFocus = session::consumeFocus,
                 onVisibleBlock = { visibleBlock = it },
+                footer = {
+                    if (shown.mode == ReadMode.READ && shown.suggestions.isNotEmpty()) {
+                        item(key = "suggestions") {
+                            SuggestionsRow(
+                                shown.suggestions,
+                                onPick = ::pickSuggestion,
+                                onDismiss = session::dismissSuggestions,
+                                modifier = Modifier.padding(top = 24.dp),
+                            )
+                        }
+                    }
+                },
             )
         }
     }
@@ -232,6 +289,7 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
         PassageActionsSheet(
             target = target,
             onDismiss = { passage = null },
+            onAsk = { ask(ConversationViewModel.Opening(selectedText = target.text)) },
             onHighlight = { vm.annotate(AnnotationKind.HIGHLIGHT, target.blockIndex, target.text); say("Highlighted") },
             onBookmark = { vm.annotate(AnnotationKind.BOOKMARK, target.blockIndex, snippet(target.text)); say("Bookmark added") },
             onCopy = {
@@ -245,6 +303,24 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
         SourceSheet(indices, settings, load = vm::blocks, onDismiss = { sourceBlocks = null })
     }
     originalPage?.let { OriginalPageDialog(book.filePath, it, onDismiss = { originalPage = null }) }
+    val opened = chatOpened
+    if (chatShown && opened != null) {
+        val micAvailable = remember { container.speechInput.isAvailable }
+        ConversationSheet(
+            vm = chat,
+            opened = opened,
+            sheetState = chatSheet,
+            micAvailable = micAvailable,
+            onDismiss = {
+                if (chat.dismiss()) {
+                    scope.launch {
+                        val result = snackbar.showSnackbar("Paused where you left off.", actionLabel = "Resume", duration = SnackbarDuration.Long)
+                        if (result == SnackbarResult.ActionPerformed) session.play()
+                    }
+                }
+            },
+        )
+    }
     if (voicePickerOpen) {
         val voices by container.narration.voices.collectAsStateWithLifecycle()
         VoicePickerDialog(
@@ -266,6 +342,7 @@ private fun ReaderBottomBar(
     onNext: () -> Unit,
     onReturn: () -> Unit,
     onMode: (ReadMode) -> Unit,
+    onAsk: () -> Unit,
     player: @Composable () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -284,6 +361,11 @@ private fun ReaderBottomBar(
                     Icon(Icons.AutoMirrored.Outlined.NavigateBefore, contentDescription = "Previous topic")
                 }
                 ModeToggle(state.mode, onMode, Modifier.weight(1f))
+                Button(onClick = onAsk, contentPadding = ButtonDefaults.ButtonWithIconContentPadding) {
+                    Icon(Icons.Outlined.Forum, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text("Ask")
+                }
                 IconButton(onClick = onNext, enabled = state.hasNext) {
                     Icon(Icons.AutoMirrored.Outlined.NavigateNext, contentDescription = "Next topic")
                 }
@@ -297,6 +379,7 @@ private fun ReaderBottomBar(
 private fun PassageActionsSheet(
     target: PassageTarget,
     onDismiss: () -> Unit,
+    onAsk: () -> Unit,
     onHighlight: () -> Unit,
     onBookmark: () -> Unit,
     onCopy: () -> Unit,
@@ -310,6 +393,7 @@ private fun PassageActionsSheet(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
         )
+        SheetAction("Ask about this", Icons.Outlined.Forum) { onAsk(); onDismiss() }
         SheetAction("Highlight", Icons.Outlined.BorderColor) { onHighlight(); onDismiss() }
         SheetAction("Bookmark", Icons.Outlined.BookmarkBorder) { onBookmark(); onDismiss() }
         SheetAction("Copy", Icons.Outlined.ContentCopy) { onCopy(); onDismiss() }
