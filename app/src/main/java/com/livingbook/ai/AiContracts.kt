@@ -17,7 +17,8 @@ data class LlmMessage(val role: String, val content: String)
 data class LlmRequest(
     val system: String,
     val messages: List<LlmMessage>,
-    val maxTokens: Int = 1500,
+    /** Includes the model's thinking, which is always on for the default model; the proxy caps it at 4000. */
+    val maxTokens: Int = 4000,
 )
 
 data class LlmResult(val text: String, val model: String)
