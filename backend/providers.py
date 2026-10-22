@@ -6,8 +6,9 @@ from dataclasses import dataclass
 import anthropic
 import httpx
 
-# Answer before the app's 90 s read timeout in the common case.
-TIMEOUT_SECONDS = 80.0
+def timeout_seconds() -> float:
+    """LLM_TIMEOUT_SECONDS, default 80. Slow local models (Ollama on a CPU) may need 300; the app waits up to 120 s."""
+    return float(os.environ.get("LLM_TIMEOUT_SECONDS", "80"))
 
 
 @dataclass
@@ -40,7 +41,7 @@ class AnthropicProvider:
         self.model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
         self.effort = os.environ.get("LLM_EFFORT", "low")
         # Reads ANTHROPIC_API_KEY.
-        self.client = client or anthropic.AsyncAnthropic(timeout=TIMEOUT_SECONDS, max_retries=1)
+        self.client = client or anthropic.AsyncAnthropic(timeout=timeout_seconds(), max_retries=1)
 
     async def complete(self, system: str, messages: list[dict], max_tokens: int) -> Completion:
         extra = {}
@@ -94,7 +95,7 @@ class OpenAICompatibleProvider:
         key = os.environ.get("OPENAI_API_KEY")  # optional for Ollama
         self.http = http or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {key}"} if key else {},
-            timeout=TIMEOUT_SECONDS,
+            timeout=timeout_seconds(),
         )
 
     async def complete(self, system: str, messages: list[dict], max_tokens: int) -> Completion:
