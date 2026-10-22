@@ -240,8 +240,9 @@ class ReadingSession(
         scope.launch {
             settings.update { it.copy(granularity = granularity) }
             val topics = reading.topics(book.id, granularity)
-            _state.update { it.copy(topics = topics, granularity = granularity) }
-            loadTopic(topicIndexFor(topics, position.blockIndex), position, play = isPlaying())
+            val index = topicIndexFor(topics, position.blockIndex)
+            _state.update { it.copy(topics = topics, granularity = granularity, topicIndex = index) }
+            loadTopic(index, position, play = isPlaying())
         }
     }
 
