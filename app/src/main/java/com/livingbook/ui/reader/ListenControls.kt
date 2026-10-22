@@ -132,8 +132,8 @@ fun VoicePickerDialog(voices: List<VoiceOption>, selected: String?, onSelect: (S
             LazyColumn {
                 item { VoiceRow("Phone default", null, selected == null) { onSelect(null) } }
                 items(voices, key = { it.id }) { voice ->
-                    val detail = listOfNotNull(voice.localeTag, "needs internet".takeIf { voice.needsNetwork }).joinToString(", ")
-                    VoiceRow(voice.label, detail, selected == voice.id) { onSelect(voice.id) }
+                    // The engine's label already names the language; only the network need is worth adding.
+                    VoiceRow(voice.label, "Needs an internet connection".takeIf { voice.needsNetwork }, selected == voice.id) { onSelect(voice.id) }
                 }
                 if (voices.isEmpty()) {
                     item {
