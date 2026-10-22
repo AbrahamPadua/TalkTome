@@ -15,12 +15,15 @@ import androidx.navigation.toRoute
 import com.livingbook.AppContainer
 import com.livingbook.ui.library.LibraryScreen
 import com.livingbook.ui.reader.ReaderScreen
+import com.livingbook.ui.settings.SettingsScreen
 import com.livingbook.ui.theme.LivingBookTheme
 import kotlinx.serialization.Serializable
 
 @Serializable data object LibraryRoute
 
 @Serializable data class ReaderRoute(val bookId: String)
+
+@Serializable data object SettingsRoute
 
 /** App entry composable: theme + navigation. */
 @Composable
@@ -33,10 +36,19 @@ fun LivingBookRoot(container: AppContainer) {
             val nav = rememberNavController()
             NavHost(nav, startDestination = LibraryRoute) {
                 composable<LibraryRoute> {
-                    LibraryScreen(container, onOpenBook = { id -> if (nav.currentDestination?.hasRoute<LibraryRoute>() == true) nav.navigate(ReaderRoute(id)) }, onOpenSettings = {})
+                    LibraryScreen(container, onOpenBook = { id -> if (nav.currentDestination?.hasRoute<LibraryRoute>() == true) nav.navigate(ReaderRoute(id)) }, onOpenSettings = dropUnlessResumed { nav.navigate(SettingsRoute) })
                 }
                 composable<ReaderRoute> { entry ->
-                    ReaderScreen(container, entry.toRoute<ReaderRoute>().bookId, settings, onBack = dropUnlessResumed { nav.popBackStack() })
+                    ReaderScreen(
+                        container,
+                        entry.toRoute<ReaderRoute>().bookId,
+                        settings,
+                        onBack = dropUnlessResumed { nav.popBackStack() },
+                        onOpenSettings = dropUnlessResumed { nav.navigate(SettingsRoute) },
+                    )
+                }
+                composable<SettingsRoute> {
+                    SettingsScreen(container, settings, onBack = dropUnlessResumed { nav.popBackStack() })
                 }
             }
         }

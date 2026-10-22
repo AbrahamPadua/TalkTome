@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.BorderColor
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -96,7 +97,7 @@ import kotlinx.coroutines.launch
 /** The open book: one topic at a time, original or guided, with contents, annotations and the original PDF page. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings, onBack: () -> Unit) {
+fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings, onBack: () -> Unit, onOpenSettings: () -> Unit) {
     val session = container.session
     val state by session.state.collectAsStateWithLifecycle()
     val vm = viewModel { ReaderViewModel(bookId, container.reading) }
@@ -197,6 +198,7 @@ fun ReaderScreen(container: AppContainer, bookId: String, settings: AppSettings,
                     IconButton(onClick = { contentsOpen = true }) {
                         Icon(Icons.AutoMirrored.Outlined.Toc, contentDescription = "Contents and bookmarks")
                     }
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Outlined.Settings, contentDescription = "Settings") }
                 },
             )
         },
